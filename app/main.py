@@ -1,15 +1,21 @@
 import json
 import sys
-import bencodepy
-import requests
+
+#import bencodepy
+#import requests
 
 
 def decode_bencode(bencoded_value):
-    if chr(bencoded_value[0]).isdigit():
+    first_char = chr(bencoded_value[0])
+    last_char = chr(bencoded_value[-1])
+
+    if first_char.isdigit():
         first_colon_index = bencoded_value.find(b":")
         if first_colon_index == -1:
             raise ValueError("Invalid encoded value")
-        return bencoded_value[first_colon_index+1:]
+        return str(bencoded_value[first_colon_index+1:], "utf-8")
+    elif first_char == "i" and last_char == "e":
+        return int(bencoded_value[1:-1])
     else:
         raise NotImplementedError("Only strings are supported at the moment")
 
@@ -20,18 +26,7 @@ def main():
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
 
-        # json.dumps() can't handle bytes, but bencoded "strings" need to be
-        # bytestrings since they might contain non utf-8 characters.
-        #
-        # Let's convert them to strings for printing to the console.
-        def bytes_to_str(data):
-            if isinstance(data, bytes):
-                return data.decode()
-
-            raise TypeError(f"Type not serializable: {type(data)}")
-
-        # Uncomment this block to pass the first stage
-        print(json.dumps(decode_bencode(bencoded_value), default=bytes_to_str))
+        print(json.dumps(decode_bencode(bencoded_value)))
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
