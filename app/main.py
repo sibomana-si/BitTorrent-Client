@@ -17,6 +17,9 @@ def decode_int(bencoded_value):
 def decode_list(bencoded_value):
     pass
 
+def decode_dict(bencoded_value):
+    pass
+
 def decode_bencoded(bencoded_value):
     pass
 
