@@ -1,6 +1,7 @@
 import json
 import sys
 from pathlib import Path
+import hashlib
 #import bencodepy
 #import requests
 
@@ -55,6 +56,20 @@ def decode_bencoded(bencoded_value):
 
     return decoded_container[0]
 
+def bencode_info_dict(info_dict: dict):
+    bencoded_info_dict = b"d"
+    for key, value in info_dict.items():
+        bencoded_info_dict += f"{len(key)}:{key}".encode()
+        if isinstance(value, int):
+            bencoded_info_dict += f"i{value}e".encode()
+        elif isinstance(value, str):
+            bencoded_info_dict += f"{len(value)}:{value}".encode()
+        elif isinstance(value, bytes):
+            bencoded_info_dict += str(len(value)).encode() + b":" + value
+        else:
+            raise ValueError(f"invalid value type: {value} | {type(value)}")
+    bencoded_info_dict += b"e"
+    return bencoded_info_dict
 
 def main():
     command = sys.argv[1]
@@ -82,6 +97,10 @@ def main():
             print(f"Tracker URL: {decoded_value['announce']}")
         if "info" in decoded_value and "length" in decoded_value["info"]:
             print(f"Length: {decoded_value['info']['length']}")
+            info_dict = decoded_value["info"]
+            bencoded_info_dict: bytes = bencode_info_dict(info_dict)
+            print(f"Info Hash: {hashlib.sha1(bencoded_info_dict).hexdigest()}")
+
     else:
         print(json.dumps(decoded_value))
 
