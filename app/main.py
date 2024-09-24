@@ -95,12 +95,19 @@ def main():
     if command == "info" and isinstance(decoded_value, dict):
         if "announce" in decoded_value:
             print(f"Tracker URL: {decoded_value['announce']}")
-        if "info" in decoded_value and "length" in decoded_value["info"]:
-            print(f"Length: {decoded_value['info']['length']}")
-            info_dict = decoded_value["info"]
-            bencoded_info_dict: bytes = bencode_info_dict(info_dict)
-            print(f"Info Hash: {hashlib.sha1(bencoded_info_dict).hexdigest()}")
-
+        if "info" in decoded_value:
+            if "length" in decoded_value["info"]:
+                print(f"Length: {decoded_value['info']['length']}")
+                info_dict = decoded_value["info"]
+                bencoded_info_dict: bytes = bencode_info_dict(info_dict)
+                print(f"Info Hash: {hashlib.sha1(bencoded_info_dict).hexdigest()}")
+            if "piece length" in decoded_value["info"]:
+                print(f"Piece Length: {decoded_value['info']['piece length']}")
+            if "pieces" in decoded_value["info"]:
+                piece_hashes = decoded_value["info"]["pieces"]
+                print("Piece Hashes: ")
+                for i in range(0, len(piece_hashes), 20):
+                    print(f"{piece_hashes[i:i+20].hex()}")
     else:
         print(json.dumps(decoded_value))
 
