@@ -2,8 +2,9 @@ import json
 import sys
 from pathlib import Path
 import hashlib
+import requests
+from urllib.parse import urlencode, quote_plus
 #import bencodepy
-#import requests
 
 
 def decode_bencoded(bencoded_value):
@@ -14,7 +15,7 @@ def decode_bencoded(bencoded_value):
     while i < bencoded_length:
         if bencoded_value[i:i+1] == b":":
             while len(decoded_container) != 0 and isinstance(decoded_container[-1], bytes):
-                if decoded_container[-1].decode().isdigit():
+                if decoded_container[-1].isascii() and decoded_container[-1].decode().isdigit():
                     temp_list.append(decoded_container.pop().decode())
                 else:
                     break
@@ -76,7 +77,7 @@ def main():
 
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
-    elif command == "info":
+    elif command in ("info", "peers"):
         meta_info_file_name = sys.argv[2]
         if meta_info_file_name.endswith(".torrent"):
             meta_info_file = Path(meta_info_file_name)
@@ -92,22 +93,40 @@ def main():
     if first_char.isalpha() and first_char not in ("i", "l", "d"):
         raise ValueError(f"Invalid encoding character: {first_char} | {bencoded_value}")
     decoded_value = decode_bencoded(bencoded_value)
-    if command == "info" and isinstance(decoded_value, dict):
-        if "announce" in decoded_value:
-            print(f"Tracker URL: {decoded_value['announce']}")
-        if "info" in decoded_value:
-            if "length" in decoded_value["info"]:
-                print(f"Length: {decoded_value['info']['length']}")
-                info_dict = decoded_value["info"]
-                bencoded_info_dict: bytes = bencode_info_dict(info_dict)
-                print(f"Info Hash: {hashlib.sha1(bencoded_info_dict).hexdigest()}")
-            if "piece length" in decoded_value["info"]:
-                print(f"Piece Length: {decoded_value['info']['piece length']}")
-            if "pieces" in decoded_value["info"]:
-                piece_hashes = decoded_value["info"]["pieces"]
-                print("Piece Hashes: ")
-                for i in range(0, len(piece_hashes), 20):
-                    print(f"{piece_hashes[i:i+20].hex()}")
+    if command in ("info", "peers") and isinstance(decoded_value, dict):
+        tracker_url = decoded_value['announce']
+        file_length = decoded_value['info']['length']
+        bencoded_info_dict: bytes = bencode_info_dict(decoded_value["info"])
+        info_hash = hashlib.sha1(bencoded_info_dict)
+        piece_length = decoded_value['info']['piece length']
+        piece_hashes = decoded_value["info"]["pieces"]
+
+        if command == "info":
+            print(f"Tracker URL: {tracker_url}")
+            print(f"Length: {file_length}")
+            print(f"Info Hash: {info_hash.hexdigest()}")
+            print(f"Piece Length: {piece_length}")
+            print("Piece Hashes: ")
+            for i in range(0, len(piece_hashes), 20):
+                print(f"{piece_hashes[i:i + 20].hex()}")
+        else:
+            peer_id = '00112233445566778899'
+            port = 6881
+            uploaded = downloaded = 0
+            left = file_length
+            compact = 1
+            tracker_params = {"info_hash": info_hash.digest(), "peer_id": peer_id, "port": port, "uploaded": uploaded,
+                              "downloaded": downloaded, "left": left, "compact": compact}
+            encoded_tracker_params = urlencode(tracker_params, quote_via=quote_plus)
+            tracker_url += f"?{encoded_tracker_params}"
+            tracker_response = requests.get(tracker_url)
+            tracker_response_dict: dict = decode_bencoded(tracker_response.content)
+            peer_list = tracker_response_dict['peers']
+            for i in range(0, len(peer_list), 6):
+                ip = ".".join(str(byte) for byte in peer_list[i:i+4])
+                port = int.from_bytes(peer_list[i+4:i+6], 'big')
+                ip_address = f"{ip}:{port}"
+                print(f"{ip_address}")
     else:
         print(json.dumps(decoded_value))
 
