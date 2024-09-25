@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 import hashlib
 import requests
+import socket
 from urllib.parse import urlencode, quote_plus
 #import bencodepy
 
@@ -77,7 +78,7 @@ def main():
 
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
-    elif command in ("info", "peers"):
+    elif command in ("info", "peers", "handshake"):
         meta_info_file_name = sys.argv[2]
         if meta_info_file_name.endswith(".torrent"):
             meta_info_file = Path(meta_info_file_name)
@@ -93,7 +94,7 @@ def main():
     if first_char.isalpha() and first_char not in ("i", "l", "d"):
         raise ValueError(f"Invalid encoding character: {first_char} | {bencoded_value}")
     decoded_value = decode_bencoded(bencoded_value)
-    if command in ("info", "peers") and isinstance(decoded_value, dict):
+    if command in ("info", "peers", "handshake") and isinstance(decoded_value, dict):
         tracker_url = decoded_value['announce']
         file_length = decoded_value['info']['length']
         bencoded_info_dict: bytes = bencode_info_dict(decoded_value["info"])
@@ -109,7 +110,7 @@ def main():
             print("Piece Hashes: ")
             for i in range(0, len(piece_hashes), 20):
                 print(f"{piece_hashes[i:i + 20].hex()}")
-        else:
+        elif command == "peers":
             peer_id = '00112233445566778899'
             port = 6881
             uploaded = downloaded = 0
@@ -127,6 +128,25 @@ def main():
                 port = int.from_bytes(peer_list[i+4:i+6], 'big')
                 ip_address = f"{ip}:{port}"
                 print(f"{ip_address}")
+        elif command == "handshake":
+            try:
+                peer_ip, peer_port = sys.argv[3].split(":")
+                protocol_name = b"BitTorrent protocol"
+                protocol_name_length = len(protocol_name)
+                reserved_bytes = 0
+                peer_id = '00112233445566778899'
+                handshake_message = (protocol_name_length.to_bytes(1, 'big') + protocol_name
+                                 + reserved_bytes.to_bytes(8, 'big') + info_hash.digest() + peer_id.encode())
+                peer_socket: socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                peer_socket.connect((peer_ip, int(peer_port)))
+                peer_socket.sendall(handshake_message)
+                peer_response = peer_socket.recv(68)
+                peer_response_id = peer_response[-20:].hex()
+                print(f"Peer ID: {peer_response_id}")
+                peer_socket.close()
+            except Exception as e:
+                print(e)
+
     else:
         print(json.dumps(decoded_value))
 
