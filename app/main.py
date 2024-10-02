@@ -7,7 +7,7 @@ from sys import meta_path
 import requests
 import socket
 import logging
-from urllib.parse import urlencode, quote_plus
+from urllib.parse import urlencode, quote_plus, unquote_plus
 #import bencodepy
 
 logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
@@ -263,6 +263,22 @@ def download_file(meta_info: dict, peer_list: list) -> None:
         print("exception in download_file")
         raise e
 
+def parse_magnet_link(magnetic_link: str) -> dict:
+    meta_info = {}
+    if magnetic_link.startswith("magnet:?xt="):
+        info_hash_index = magnetic_link.find("xt=urn:btih:")
+        tracker_url_index = magnetic_link.find("tr=")
+        if info_hash_index != -1 and tracker_url_index != -1:
+            info_hash = magnetic_link[info_hash_index + 12:info_hash_index + 52]
+            tracker_url = magnetic_link[tracker_url_index + 3:]
+            meta_info["Info Hash"] = info_hash
+            meta_info["Tracker URL"] = unquote_plus(tracker_url)
+            return meta_info
+        else:
+            raise Exception(f"Missing Info Hash or Tracker URL: {magnetic_link}")
+    else:
+        raise Exception(f"Invalid magnetic link: {magnetic_link}")
+
 
 def main():
     command = sys.argv[1]
@@ -305,6 +321,13 @@ def main():
                 else:
                     execute_command(meta_info, peer_list)
                     print("torrent file download completed.")
+    elif command == "magnet_parse":
+        magnet_link = sys.argv[2]
+        result = parse_magnet_link(magnet_link)
+        print(f"Tracker URL: {result['Tracker URL']}")
+        print(f"Info Hash: {result['Info Hash']}")
+    else:
+        raise Exception("Invalid command!")
 
 
 if __name__ == "__main__":
