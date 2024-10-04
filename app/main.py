@@ -335,23 +335,23 @@ def main():
         meta_info["Length"] = 999 # arbitrary value
         peer_list: list = get_peer_list(meta_info)
         peer_socket, handshake_response = perform_handshake(meta_info, peer_list, True)
-        print(f"handshake response: {handshake_response}")
+        #print(f"handshake response: {handshake_response}")
         peer_response_id = handshake_response[-20:].hex()
         print(f"Peer ID: {peer_response_id}")
         bitfield_message = peer_socket.recv(20)
-        print(f"bitfield: {bitfield_message}")
+        #print(f"bitfield: {bitfield_message}")
         peer_reserved_bytes = int.from_bytes(handshake_response[20:28], 'big')
-        print(f"peer_reserved_bytes: {peer_reserved_bytes} | {handshake_response[20:28]}")
+        #print(f"peer_reserved_bytes: {peer_reserved_bytes} | {handshake_response[20:28]}")
         if peer_reserved_bytes != 0:
             handshake_dict = {"m": {"ut_metadata": 1}}
             xt_handshake_dict: bytes = bencode_info_dict(handshake_dict)
             xt_handshake_dict_size = len(xt_handshake_dict)
-            print(f"xt_handshake_dict: {xt_handshake_dict} | {len(xt_handshake_dict)}")
+            #print(f"xt_handshake_dict: {xt_handshake_dict} | {len(xt_handshake_dict)}")
             xt_handshake_message = (int.to_bytes(2 + xt_handshake_dict_size, 4, 'big')
                                     + int.to_bytes(20, 1, 'big')
                                     + int.to_bytes(0, 1, 'big')
                                     + xt_handshake_dict)
-            print(f"xt_handshake_message: {xt_handshake_message} | {len(xt_handshake_message)}")
+            #print(f"xt_handshake_message: {xt_handshake_message} | {len(xt_handshake_message)}")
             peer_socket.sendall(xt_handshake_message)
             #xt_handshake_response = b""
             #xt_handshake_response_size = 30
@@ -363,7 +363,7 @@ def main():
             #    if len(received_data) < buf_size and len(xt_handshake_response) >= xt_handshake_response_size:
             #        break
             xt_handshake_response: bytes = peer_socket.recv(20)
-            print(f"xt_handshake_response: {xt_handshake_response} | {len(xt_handshake_response)}")
+            #print(f"xt_handshake_response: {xt_handshake_response} | {len(xt_handshake_response)}")
             #handshake_dict = decode_bencoded(xt_handshake_response[2:])
         peer_socket.close()
     else:
