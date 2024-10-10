@@ -160,7 +160,7 @@ def connect_to_peer(peer_socket: socket, peer_index: int, peer_list: list):
 
 def perform_handshake(meta_info: dict, peer_list: list, magnet: bool=False) -> tuple[socket, bytes]:
     try:
-        peer_id = '00112233445566778899'
+        peer_id = '00112233445566998877'
         protocol_name = b"BitTorrent protocol"
         protocol_name_length = len(protocol_name)
         reserved_bytes = 1048576 if magnet else 0
