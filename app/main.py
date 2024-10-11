@@ -281,6 +281,52 @@ def parse_magnet_link(magnetic_link: str) -> dict:
     else:
         raise Exception(f"Invalid magnetic link: {magnetic_link}")
 
+def perform_extension_handshake(meta_info: dict) -> tuple[socket, dict]:
+    meta_info["Info Hash"] = int(meta_info["Info Hash"], 16).to_bytes(20, 'big')
+    meta_info["Length"] = 999  # arbitrary value
+    peer_list: list = get_peer_list(meta_info)
+    peer_socket, handshake_response = perform_handshake(meta_info, peer_list, True)
+    peer_response_id = handshake_response[-20:].hex()
+    #print(f"Peer ID: {peer_response_id}")
+    bitfield_message = peer_socket.recv(6)
+    peer_reserved_bytes = int.from_bytes(handshake_response[20:28], 'big')
+    if peer_reserved_bytes != 0:
+        handshake_dict = {"m": {"ut_metadata": 1}}
+        xt_handshake_dict: bytes = bencode_info_dict(handshake_dict)
+        xt_handshake_dict_size = len(xt_handshake_dict)
+        xt_handshake_message = (int.to_bytes(2 + xt_handshake_dict_size, 4, 'big')
+                                + int.to_bytes(20, 1, 'big')
+                                + int.to_bytes(0, 1, 'big')
+                                + xt_handshake_dict)
+        peer_socket.sendall(xt_handshake_message)
+        xt_handshake_response: bytes = peer_socket.recv(1024)
+        handshake_dict = decode_bencoded(xt_handshake_response[6:])
+        if 'm' not in handshake_dict or 'ut_metadata' not in handshake_dict['m']:
+            peer_socket.close()
+            raise Exception(f"Invalid extension handshake response! {handshake_dict} | {xt_handshake_response}")
+    else:
+        peer_socket.close()
+        raise Exception("Peer does not support metadata extension!")
+    handshake_dict["Peer ID"] = peer_response_id
+    return peer_socket, handshake_dict
+
+def get_magnet_info(ext_handshake_dict: dict, peer_socket: socket) -> None:
+    message_id = 20
+    ext_message_id = ext_handshake_dict['m']['ut_metadata']
+    payload_dict = {'msg_type': 0, 'piece': 0}
+    message_payload = bencode_info_dict(payload_dict)
+    #print(f"message_payload: {message_payload} | {len(message_payload)}")
+    request_message = (int.to_bytes(2 + len(message_payload), 4, 'big')
+                       + int.to_bytes(message_id, 1, 'big')
+                       + int.to_bytes(ext_message_id, 1, 'big') + message_payload)
+    #print(f"request_message: {request_message} | {len(request_message)}")
+    peer_socket.sendall(request_message)
+    #magnet_info_response = peer_socket.recv(1024)
+    #print(f"magnet_info_response: {magnet_info_response} | {len(magnet_info_response)}")
+    #magnet_info_dict = decode_bencoded(magnet_info_response[6:])
+    #print(f"magnet_info_dict: {magnet_info_dict}")
+
+
 
 def main():
     command = sys.argv[1]
@@ -292,7 +338,7 @@ def main():
         execute_command = command_dict[command]
         if execute_command == decode_bencoded:
             result = execute_command(bencoded_value)
-            print(json.dumps(result))
+            print((json.dumps(result)))
         elif execute_command == get_meta_info:
             result = execute_command(bencoded_value)
             print(f"Tracker URL: {result['Tracker URL']}")
@@ -331,31 +377,15 @@ def main():
     elif command == "magnet_handshake":
         magnet_link = sys.argv[2]
         meta_info = parse_magnet_link(magnet_link)
-        meta_info["Info Hash"] = int(meta_info["Info Hash"], 16).to_bytes(20, 'big')
-        meta_info["Length"] = 999 # arbitrary value
-        peer_list: list = get_peer_list(meta_info)
-        peer_socket, handshake_response = perform_handshake(meta_info, peer_list, True)
-        peer_response_id = handshake_response[-20:].hex()
-        print(f"Peer ID: {peer_response_id}")
-        bitfield_message = peer_socket.recv(6)
-        peer_reserved_bytes = int.from_bytes(handshake_response[20:28], 'big')
-        if peer_reserved_bytes != 0:
-            handshake_dict = {"m": {"ut_metadata": 1}}
-            xt_handshake_dict: bytes = bencode_info_dict(handshake_dict)
-            xt_handshake_dict_size = len(xt_handshake_dict)
-            xt_handshake_message = (int.to_bytes(2 + xt_handshake_dict_size, 4, 'big')
-                                    + int.to_bytes(20, 1, 'big')
-                                    + int.to_bytes(0, 1, 'big')
-                                    + xt_handshake_dict)
-            peer_socket.sendall(xt_handshake_message)
-            xt_handshake_response: bytes = peer_socket.recv(1024)
-            handshake_dict = decode_bencoded(xt_handshake_response[6:])
-            if 'm' in handshake_dict and 'ut_metadata' in handshake_dict['m']:
-                print(f"Peer Metadata Extension ID: {handshake_dict['m']['ut_metadata']}")
-            else:
-                raise Exception(f"Invalid extension handshake response! {handshake_dict} | {xt_handshake_response}")
-        else:
-            print("Peer does not support metadata extension!")
+        peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
+        peer_socket.close()
+        print(f"Peer ID: {ext_handshake_dict['Peer ID']}")
+        print(f"Peer Metadata Extension ID: {ext_handshake_dict['m']['ut_metadata']}")
+    elif command == "magnet_info":
+        magnet_link = sys.argv[2]
+        meta_info = parse_magnet_link(magnet_link)
+        peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
+        get_magnet_info(ext_handshake_dict, peer_socket)
         peer_socket.close()
     else:
         raise Exception("Invalid command!")
