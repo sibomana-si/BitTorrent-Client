@@ -123,7 +123,7 @@ def get_meta_info(bencoded_value: bytes) -> dict:
     return meta_info
 
 def get_peer_list(meta_info: dict) -> list:
-    peer_id = '00112233445566778899'
+    peer_id = '00112233445566998877'
     peer_list = []
     tracker_url = meta_info["Tracker URL"]
     info_hash = meta_info["Info Hash"] if type(meta_info["Info Hash"]) == bytes else meta_info["Info Hash"].digest()
@@ -287,7 +287,6 @@ def perform_extension_handshake(meta_info: dict) -> tuple[socket, dict]:
     peer_list: list = get_peer_list(meta_info)
     peer_socket, handshake_response = perform_handshake(meta_info, peer_list, True)
     peer_response_id = handshake_response[-20:].hex()
-    #print(f"Peer ID: {peer_response_id}")
     bitfield_message = peer_socket.recv(6)
     peer_reserved_bytes = int.from_bytes(handshake_response[20:28], 'big')
     if peer_reserved_bytes != 0:
@@ -332,6 +331,72 @@ def get_magnet_info(meta_info: dict, ext_handshake_dict: dict, peer_socket: sock
         piece_hashes_list.append(piece_hashes[i:i + 20].hex())
     magnet_info["pieces"] = piece_hashes_list
     return magnet_info
+
+def download_magnet_piece(meta_info: dict, piece_index: int) -> bytes:
+    try:
+        print(f"downloading piece_index: {piece_index} ...")
+        block_size = 2 ** 14
+        byte_length = 4
+        block_reqs = []
+        piece_blocks = []
+
+        peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
+        magnet_info = get_magnet_info(meta_info, ext_handshake_dict, peer_socket)
+
+        total_file_length = magnet_info["Length"]
+        piece_length = magnet_info["Piece Length"]
+        piece_hashes_list = magnet_info["pieces"]
+        piece_hash = piece_hashes_list[piece_index]
+
+        interested_message = int.to_bytes(1, 4, 'big') + int.to_bytes(2, 1, 'big')
+        peer_socket.sendall(interested_message)
+        unchoke_message = peer_socket.recv(5)
+
+        if piece_index == (len(piece_hashes_list) - 1) and total_file_length % piece_length != 0:
+            piece_size = total_file_length % piece_length
+        else:
+            piece_size = piece_length
+
+        block_index = int.to_bytes(piece_index, byte_length, 'big')
+        block_length = int.to_bytes(block_size, byte_length, 'big')
+        for i in range(piece_size // block_size):
+            block_begin = int.to_bytes(i * block_size, byte_length, 'big')
+            block = block_index + block_begin + block_length
+            block_reqs.append(block)
+
+        if piece_size % block_size != 0:
+            block_begin = int.to_bytes((piece_size // block_size) * block_size, byte_length, 'big')
+            block_length = int.to_bytes((piece_size % block_size), byte_length, 'big')
+            block = block_index + block_begin + block_length
+            block_reqs.append(block)
+
+        for block_req in block_reqs:
+            piece_block = b""
+            request_message = (int.to_bytes(13, 4, 'big')
+                               + int.to_bytes(6, 1, 'big') + block_req)
+            peer_socket.sendall(request_message)
+            piece_block_size = int.from_bytes(request_message[-4:], 'big')
+            buf_size = 2048
+
+            while True:
+                received_data = peer_socket.recv(buf_size)
+                piece_block += received_data
+                if len(received_data) < buf_size and len(piece_block) >= piece_block_size:
+                    break
+
+            piece_blocks.append(piece_block[13:])
+        downloaded_piece = b"".join(piece_blocks)
+        downloaded_piece_hash = hashlib.sha1(downloaded_piece).hexdigest()
+        if downloaded_piece_hash != piece_hash:
+            raise ValueError(f"Invalid piece hash: {downloaded_piece_hash} | {piece_hash}")
+        else:
+            print(f"valid piece hash: {downloaded_piece_hash} | {piece_hash}")
+
+        peer_socket.close()
+        return downloaded_piece
+    except Exception as e:
+        print("exception in download_magnet_piece")
+        raise e
 
 
 def main():
@@ -399,6 +464,14 @@ def main():
         print("Piece Hashes: ")
         print("\n".join(magnet_info["pieces"]))
         peer_socket.close()
+    elif command == "magnet_download_piece":
+        piece_outfile = Path(sys.argv[3])
+        magnet_link = sys.argv[4]
+        piece_index = int(sys.argv[5])
+        meta_info = parse_magnet_link(magnet_link)
+        magnet_piece_data = download_magnet_piece(meta_info, piece_index)
+        piece_outfile.write_bytes(magnet_piece_data)
+        print(f"magnet piece downloaded to {piece_outfile}")
     else:
         raise Exception("Invalid command!")
 
