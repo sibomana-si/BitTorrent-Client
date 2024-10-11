@@ -1,12 +1,11 @@
 import json
 import sys
-from pathlib import Path
 import hashlib
-from sys import meta_path
-
 import requests
 import socket
 import logging
+from pathlib import Path
+from sys import meta_path
 from urllib.parse import urlencode, quote_plus, unquote_plus
 #import bencodepy
 
