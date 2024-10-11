@@ -310,22 +310,28 @@ def perform_extension_handshake(meta_info: dict) -> tuple[socket, dict]:
     handshake_dict["Peer ID"] = peer_response_id
     return peer_socket, handshake_dict
 
-def get_magnet_info(ext_handshake_dict: dict, peer_socket: socket) -> None:
+def get_magnet_info(meta_info: dict, ext_handshake_dict: dict, peer_socket: socket) -> dict:
     message_id = 20
     ext_message_id = ext_handshake_dict['m']['ut_metadata']
     payload_dict = {'msg_type': 0, 'piece': 0}
     message_payload = bencode_info_dict(payload_dict)
-    #print(f"message_payload: {message_payload} | {len(message_payload)}")
     request_message = (int.to_bytes(2 + len(message_payload), 4, 'big')
                        + int.to_bytes(message_id, 1, 'big')
                        + int.to_bytes(ext_message_id, 1, 'big') + message_payload)
-    #print(f"request_message: {request_message} | {len(request_message)}")
     peer_socket.sendall(request_message)
-    #magnet_info_response = peer_socket.recv(1024)
-    #print(f"magnet_info_response: {magnet_info_response} | {len(magnet_info_response)}")
-    #magnet_info_dict = decode_bencoded(magnet_info_response[6:])
-    #print(f"magnet_info_dict: {magnet_info_dict}")
-
+    magnet_info_response = peer_socket.recv(1024)
+    magnet_info_dict = decode_bencoded(magnet_info_response[6:])
+    metadata_piece_size = magnet_info_dict['total_size']
+    metadata_piece_dict = decode_bencoded(magnet_info_response[-metadata_piece_size:])
+    magnet_info = {"Tracker URL": meta_info["Tracker URL"], "Length": metadata_piece_dict["length"],
+                   "Info Hash": hashlib.sha1(magnet_info_response[-metadata_piece_size:]),
+                   "Piece Length": metadata_piece_dict["piece length"]}
+    piece_hashes = metadata_piece_dict["pieces"]
+    piece_hashes_list = []
+    for i in range(0, len(piece_hashes), 20):
+        piece_hashes_list.append(piece_hashes[i:i + 20].hex())
+    magnet_info["pieces"] = piece_hashes_list
+    return magnet_info
 
 
 def main():
@@ -385,7 +391,13 @@ def main():
         magnet_link = sys.argv[2]
         meta_info = parse_magnet_link(magnet_link)
         peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
-        get_magnet_info(ext_handshake_dict, peer_socket)
+        magnet_info = get_magnet_info(meta_info, ext_handshake_dict, peer_socket)
+        print(f"Tracker URL: {magnet_info['Tracker URL']}")
+        print(f"Length: {magnet_info['Length']}")
+        print(f"Info Hash: {magnet_info['Info Hash'].hexdigest()}")
+        print(f"Piece Length: {magnet_info['Piece Length']}")
+        print("Piece Hashes: ")
+        print("\n".join(magnet_info["pieces"]))
         peer_socket.close()
     else:
         raise Exception("Invalid command!")
