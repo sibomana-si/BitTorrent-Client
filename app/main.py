@@ -9,12 +9,10 @@ from sys import meta_path
 from urllib.parse import urlencode, quote_plus, unquote_plus
 #import bencodepy
 
-logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
-logger = logging.getLogger(__name__)
 
-def get_bencoded(command:str, argv: list) -> bytes:
+def get_bencoded(command:str) -> bytes:
     if command == "decode":
-        bencoded_value = argv[2].encode()
+        bencoded_value = sys.argv[2].encode()
     elif command in ("info", "peers", "handshake"):
         meta_info_file_name = sys.argv[2]
         bencoded_value = validate_metainfo_filename(meta_info_file_name)
@@ -122,7 +120,6 @@ def get_meta_info(bencoded_value: bytes) -> dict:
     return meta_info
 
 def get_peer_list(meta_info: dict) -> list:
-    peer_id = '00112233445566998877'
     peer_list = []
     tracker_url = meta_info["Tracker URL"]
     info_hash = meta_info["Info Hash"] if type(meta_info["Info Hash"]) == bytes else meta_info["Info Hash"].digest()
@@ -145,7 +142,7 @@ def get_peer_list(meta_info: dict) -> list:
 
     return peer_list
 
-def connect_to_peer(peer_socket: socket, peer_index: int, peer_list: list):
+def connect_to_peer(peer_socket: socket, peer_index: int, peer_list: list) -> None:
     try:
         peer_ip, peer_port = peer_list[peer_index].split(":")
         peer_socket.connect((peer_ip, int(peer_port)))
@@ -159,7 +156,6 @@ def connect_to_peer(peer_socket: socket, peer_index: int, peer_list: list):
 
 def perform_handshake(meta_info: dict, peer_list: list, magnet: bool=False) -> tuple[socket, bytes]:
     try:
-        peer_id = '00112233445566998877'
         protocol_name = b"BitTorrent protocol"
         protocol_name_length = len(protocol_name)
         reserved_bytes = 1048576 if magnet else 0
@@ -178,7 +174,7 @@ def perform_handshake(meta_info: dict, peer_list: list, magnet: bool=False) -> t
         print("exception in perform_handshake")
         raise e
 
-def download_piece(meta_info: dict, peer_list: list, piece_index: int) -> bytes:
+def download_piece(meta_info: dict, peer_socket: socket, piece_index: int) -> bytes:
     try:
         print(f"downloading piece_index: {piece_index} ...")
         block_size = 2 ** 14
@@ -190,13 +186,6 @@ def download_piece(meta_info: dict, peer_list: list, piece_index: int) -> bytes:
         piece_length = meta_info["Piece Length"]
         piece_hashes_list = meta_info["Piece Hashes"]
         piece_hash = piece_hashes_list[piece_index]
-
-        peer_socket, handshake_response = perform_handshake(meta_info, peer_list)
-        bitfield_message = peer_socket.recv(20)
-        interested_message = int.to_bytes(1, 4, 'big') + int.to_bytes(2, 1, 'big')
-        peer_socket.sendall(interested_message)
-        unchoke_message = peer_socket.recv(5)
-
 
         if piece_index == (len(piece_hashes_list) - 1) and total_file_length % piece_length != 0:
             piece_size = total_file_length % piece_length
@@ -239,27 +228,26 @@ def download_piece(meta_info: dict, peer_list: list, piece_index: int) -> bytes:
         else:
             print(f"valid piece hash: {downloaded_piece_hash} | {piece_hash}")
 
-        peer_socket.close()
         return downloaded_piece
     except Exception as e:
         print("exception in download_piece")
         raise e
 
-def download_file(meta_info: dict, peer_list: list) -> None:
+def download_file(meta_info: dict, peer_socket: socket) -> None:
     try:
         torrent_outfile = Path(sys.argv[3])
         print(f"downloading to {torrent_outfile} ...")
         print(f"pieces to download: {len(meta_info['Piece Hashes'])}")
+        file_data = b""
 
         for piece_index in range(len(meta_info["Piece Hashes"])):
-            downloaded_piece: bytes = download_piece(meta_info, peer_list, piece_index)
-            if piece_index == 0:
-                outfile = torrent_outfile.open("wb")
-            else:
-                outfile = torrent_outfile.open("ab")
-            outfile.write(downloaded_piece)
-            outfile.close()
-            print(f"piece_{piece_index} | {len(downloaded_piece)} downloaded to {torrent_outfile}")
+            downloaded_piece: bytes = download_piece(meta_info, peer_socket, piece_index)
+            file_data += downloaded_piece
+            print(f"piece_{piece_index} | {len(downloaded_piece)} downloaded.")
+
+        with torrent_outfile.open('wb') as outfile:
+            outfile.write(file_data)
+
     except Exception as e:
         print("exception in download_file")
         raise e
@@ -299,11 +287,9 @@ def perform_extension_handshake(meta_info: dict) -> tuple[socket, dict]:
         peer_socket.sendall(xt_handshake_message)
         xt_handshake_response: bytes = peer_socket.recv(1024)
         handshake_dict = decode_bencoded(xt_handshake_response[6:])
-        if 'm' not in handshake_dict or 'ut_metadata' not in handshake_dict['m']:
-            peer_socket.close()
+        if "m" not in handshake_dict or "ut_metadata" not in handshake_dict["m"]:
             raise Exception(f"Invalid extension handshake response! {handshake_dict} | {xt_handshake_response}")
     else:
-        peer_socket.close()
         raise Exception("Peer does not support metadata extension!")
     handshake_dict["Peer ID"] = peer_response_id
     return peer_socket, handshake_dict
@@ -328,178 +314,112 @@ def get_magnet_info(meta_info: dict, ext_handshake_dict: dict, peer_socket: sock
     piece_hashes_list = []
     for i in range(0, len(piece_hashes), 20):
         piece_hashes_list.append(piece_hashes[i:i + 20].hex())
-    magnet_info["pieces"] = piece_hashes_list
+    magnet_info["Piece Hashes"] = piece_hashes_list
     return magnet_info
 
-def download_magnet_piece(magnet_info: dict, peer_socket: socket, piece_index: int) -> bytes:
-    try:
-        print(f"downloading piece_index: {piece_index} ...")
-        block_size = 2 ** 14
-        byte_length = 4
-        block_reqs = []
-        piece_blocks = []
-
-        total_file_length = magnet_info["Length"]
-        piece_length = magnet_info["Piece Length"]
-        piece_hashes_list = magnet_info["pieces"]
-        piece_hash = piece_hashes_list[piece_index]
-
-        interested_message = int.to_bytes(1, 4, 'big') + int.to_bytes(2, 1, 'big')
-        peer_socket.sendall(interested_message)
-        unchoke_message = peer_socket.recv(5)
-
-        if piece_index == (len(piece_hashes_list) - 1) and total_file_length % piece_length != 0:
-            piece_size = total_file_length % piece_length
+def process_base_command(command: str) -> None:
+    bencoded_value = get_bencoded(command)
+    validate_bencoded(bencoded_value)
+    if command == "decode":
+        decoded_val = decode_bencoded(bencoded_value)
+        print((json.dumps(decoded_val)))
+    elif command == "info":
+        meta_info: dict = get_meta_info(bencoded_value)
+        print(f"Tracker URL: {meta_info['Tracker URL']}")
+        print(f"Length: {meta_info['Length']}")
+        print(f"Info Hash: {meta_info['Info Hash'].hexdigest()}")
+        print(f"Piece Length: {meta_info['Piece Length']}")
+        print("Piece Hashes: ")
+        print("\n".join(meta_info["Piece Hashes"]))
+    else:
+        meta_info: dict = get_meta_info(bencoded_value)
+        if command == "peers":
+            peer_list: list = get_peer_list(meta_info)
+            print("\n".join(peer_list))
         else:
-            piece_size = piece_length
+            peer_list: list = get_peer_list(meta_info)
+            peer_socket, handshake_response = perform_handshake(meta_info, peer_list)
+            bitfield_message: bytes = peer_socket.recv(20)
 
-        block_index = int.to_bytes(piece_index, byte_length, 'big')
-        block_length = int.to_bytes(block_size, byte_length, 'big')
-        for i in range(piece_size // block_size):
-            block_begin = int.to_bytes(i * block_size, byte_length, 'big')
-            block = block_index + block_begin + block_length
-            block_reqs.append(block)
+            if command == "handshake":
+                peer_response_id = handshake_response[-20:].hex()
+                print(f"Peer ID: {peer_response_id}")
+            elif command == "download_piece":
+                piece_outfile = Path(sys.argv[3])
+                piece_index = int(sys.argv[5])
+                interested_message = (int.to_bytes(1, 4, 'big')
+                                      + int.to_bytes(2, 1, 'big'))
+                peer_socket.sendall(interested_message)
+                unchoke_message: bytes = peer_socket.recv(5)
+                piece_data: bytes = download_piece(meta_info, peer_socket, piece_index)
+                piece_outfile.write_bytes(piece_data)
+                print(f"piece downloaded to {piece_outfile}")
+            elif command == "download":
+                interested_message = (int.to_bytes(1, 4, 'big')
+                                      + int.to_bytes(2, 1, 'big'))
+                peer_socket.sendall(interested_message)
+                unchoke_message: bytes = peer_socket.recv(5)
+                download_file(meta_info, peer_socket)
+                print("torrent file download completed.")
+            peer_socket.close()
 
-        if piece_size % block_size != 0:
-            block_begin = int.to_bytes((piece_size // block_size) * block_size, byte_length, 'big')
-            block_length = int.to_bytes((piece_size % block_size), byte_length, 'big')
-            block = block_index + block_begin + block_length
-            block_reqs.append(block)
-
-        for block_req in block_reqs:
-            piece_block = b""
-            request_message = (int.to_bytes(13, 4, 'big')
-                               + int.to_bytes(6, 1, 'big') + block_req)
-            peer_socket.sendall(request_message)
-            piece_block_size = int.from_bytes(request_message[-4:], 'big')
-            buf_size = 2048
-
-            while True:
-                received_data = peer_socket.recv(buf_size)
-                piece_block += received_data
-                if len(received_data) < buf_size and len(piece_block) >= piece_block_size:
-                    break
-
-            piece_blocks.append(piece_block[13:])
-        downloaded_piece = b"".join(piece_blocks)
-        downloaded_piece_hash = hashlib.sha1(downloaded_piece).hexdigest()
-        if downloaded_piece_hash != piece_hash:
-            raise ValueError(f"Invalid piece hash: {downloaded_piece_hash} | {piece_hash}")
-        else:
-            print(f"valid piece hash: {downloaded_piece_hash} | {piece_hash}")
-
-        return downloaded_piece
-    except Exception as e:
-        print("exception in download_magnet_piece")
-        raise e
-
-def download_magnet_file(magnet_info: dict, peer_socket: socket) -> None:
-    try:
-        torrent_outfile = Path(sys.argv[3])
-        print(f"downloading to {torrent_outfile} ...")
-        print(f"pieces to download: {len(magnet_info['pieces'])}")
-
-        for piece_index in range(len(magnet_info["pieces"])):
-            downloaded_piece: bytes = download_magnet_piece(magnet_info, peer_socket, piece_index)
-            if piece_index == 0:
-                outfile = torrent_outfile.open("wb")
-            else:
-                outfile = torrent_outfile.open("ab")
-            outfile.write(downloaded_piece)
-            outfile.close()
-            print(f"piece_{piece_index} | {len(downloaded_piece)} downloaded to {torrent_outfile}")
-    except Exception as e:
-        print("exception in download_file")
-        raise e
-
-
-def main():
-    command = sys.argv[1]
-    command_dict = {"decode": decode_bencoded, "info": get_meta_info, "peers": get_peer_list,
-                    "handshake": perform_handshake, "download_piece": download_piece, "download": download_file}
-    if command in command_dict:
-        bencoded_value = get_bencoded(command, sys.argv)
-        validate_bencoded(bencoded_value)
-        execute_command = command_dict[command]
-        if execute_command == decode_bencoded:
-            result = execute_command(bencoded_value)
-            print((json.dumps(result)))
-        elif execute_command == get_meta_info:
-            result = execute_command(bencoded_value)
-            print(f"Tracker URL: {result['Tracker URL']}")
-            print(f"Length: {result['Length']}")
-            print(f"Info Hash: {result['Info Hash'].hexdigest()}")
-            print(f"Piece Length: {result['Piece Length']}")
-            print("Piece Hashes: ")
-            print("\n".join(result["Piece Hashes"]))
-        else:
-            meta_info = get_meta_info(bencoded_value)
-            if execute_command == get_peer_list:
-                result = execute_command(meta_info)
-                print("\n".join(result))
-            else:
-                peer_list: list = command_dict["peers"](meta_info)
-                if execute_command == perform_handshake:
-                    result = execute_command(meta_info, peer_list)
-                    peer_socket, handshake_response = result
-                    peer_response_id = handshake_response[-20:].hex()
-                    print(f"Peer ID: {peer_response_id}")
-                    peer_socket.close()
-                elif execute_command == download_piece:
-                    piece_outfile = Path(sys.argv[3])
-                    piece_index = int(sys.argv[5])
-                    result = execute_command(meta_info, peer_list, piece_index)
-                    piece_outfile.write_bytes(result)
-                    print(f"piece downloaded to {piece_outfile}")
-                else:
-                    execute_command(meta_info, peer_list)
-                    print("torrent file download completed.")
-    elif command == "magnet_parse":
+def process_magnet_command(command: str) -> None:
+    if command in ("magnet_parse", "magnet_handshake", "magnet_info"):
         magnet_link = sys.argv[2]
-        result = parse_magnet_link(magnet_link)
-        print(f"Tracker URL: {result['Tracker URL']}")
-        print(f"Info Hash: {result['Info Hash']}")
+    else:
+        magnet_link = sys.argv[4]
+    meta_info: dict = parse_magnet_link(magnet_link)
+    if command == "magnet_parse":
+        print(f"Tracker URL: {meta_info['Tracker URL']}")
+        print(f"Info Hash: {meta_info['Info Hash']}")
     elif command == "magnet_handshake":
-        magnet_link = sys.argv[2]
-        meta_info = parse_magnet_link(magnet_link)
         peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
         peer_socket.close()
         print(f"Peer ID: {ext_handshake_dict['Peer ID']}")
         print(f"Peer Metadata Extension ID: {ext_handshake_dict['m']['ut_metadata']}")
-    elif command == "magnet_info":
-        magnet_link = sys.argv[2]
-        meta_info = parse_magnet_link(magnet_link)
+    else:
         peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
-        magnet_info = get_magnet_info(meta_info, ext_handshake_dict, peer_socket)
-        print(f"Tracker URL: {magnet_info['Tracker URL']}")
-        print(f"Length: {magnet_info['Length']}")
-        print(f"Info Hash: {magnet_info['Info Hash'].hexdigest()}")
-        print(f"Piece Length: {magnet_info['Piece Length']}")
-        print("Piece Hashes: ")
-        print("\n".join(magnet_info["pieces"]))
+        magnet_info: dict = get_magnet_info(meta_info, ext_handshake_dict, peer_socket)
+
+        if command == "magnet_info":
+            print(f"Tracker URL: {magnet_info['Tracker URL']}")
+            print(f"Length: {magnet_info['Length']}")
+            print(f"Info Hash: {magnet_info['Info Hash'].hexdigest()}")
+            print(f"Piece Length: {magnet_info['Piece Length']}")
+            print("Piece Hashes: ")
+            print("\n".join(magnet_info["Piece Hashes"]))
+        elif command == "magnet_download_piece":
+            piece_outfile = Path(sys.argv[3])
+            piece_index = int(sys.argv[5])
+            interested_message = (int.to_bytes(1, 4, 'big')
+                                  + int.to_bytes(2, 1, 'big'))
+            peer_socket.sendall(interested_message)
+            unchoke_message: bytes = peer_socket.recv(5)
+            magnet_piece_data: bytes = download_piece(magnet_info, peer_socket, piece_index)
+            piece_outfile.write_bytes(magnet_piece_data)
+            print(f"magnet piece downloaded to {piece_outfile}")
+        elif command == "magnet_download":
+            interested_message = (int.to_bytes(1, 4, 'big')
+                                  + int.to_bytes(2, 1, 'big'))
+            peer_socket.sendall(interested_message)
+            unchoke_message: bytes = peer_socket.recv(5)
+            download_file(magnet_info, peer_socket)
+            print("torrent magnet file download completed.")
         peer_socket.close()
-    elif command == "magnet_download_piece":
-        piece_outfile = Path(sys.argv[3])
-        magnet_link = sys.argv[4]
-        piece_index = int(sys.argv[5])
-        meta_info = parse_magnet_link(magnet_link)
-        peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
-        magnet_info = get_magnet_info(meta_info, ext_handshake_dict, peer_socket)
-        magnet_piece_data = download_magnet_piece(magnet_info, peer_socket, piece_index)
-        piece_outfile.write_bytes(magnet_piece_data)
-        print(f"magnet piece downloaded to {piece_outfile}")
-        peer_socket.close()
-    elif command == "magnet_download":
-        magnet_link = sys.argv[4]
-        meta_info = parse_magnet_link(magnet_link)
-        peer_socket, ext_handshake_dict = perform_extension_handshake(meta_info)
-        magnet_info = get_magnet_info(meta_info, ext_handshake_dict, peer_socket)
-        download_magnet_file(magnet_info, peer_socket)
-        print("torrent magnet file download completed.")
-        peer_socket.close()
+
+def main():
+    command = sys.argv[1]
+    base_commands = {"decode", "info", "peers", "handshake", "download_piece", "download"}
+    magnet_commands = {"magnet_parse", "magnet_handshake", "magnet_info", "magnet_download_piece", "magnet_download"}
+
+    if command in base_commands:
+        process_base_command(command)
+    elif command in magnet_commands:
+        process_magnet_command(command)
     else:
         raise Exception("Invalid command!")
 
 
 if __name__ == "__main__":
+    peer_id = '00112233445566998877'
     main()
