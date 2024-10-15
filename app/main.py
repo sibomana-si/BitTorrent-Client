@@ -4,6 +4,7 @@ import hashlib
 import requests
 import socket
 import logging
+import time
 from pathlib import Path
 from sys import meta_path
 from urllib.parse import urlencode, quote_plus, unquote_plus
@@ -205,21 +206,27 @@ def download_piece(meta_info: dict, peer_socket: socket, piece_index: int) -> by
             block = block_index + block_begin + block_length
             block_reqs.append(block)
 
-        for block_req in block_reqs:
-            piece_block = b""
-            request_message = (int.to_bytes(13, 4, 'big')
-                               + int.to_bytes(6, 1, 'big') + block_req)
-            peer_socket.sendall(request_message)
-            piece_block_size = int.from_bytes(request_message[-4:], 'big')
-            buf_size = 2048
+        for i in range(0, len(block_reqs), 4):
+            piece_block_sizes = []
+            for block_req in block_reqs[i:i + 4]:
+                
+                request_message = (int.to_bytes(13, 4, 'big')
+                                   + int.to_bytes(6, 1, 'big') + block_req)
+                peer_socket.sendall(request_message)
+                piece_block_size = 13 + int.from_bytes(request_message[-4:], 'big')
+                piece_block_sizes.append(piece_block_size)
 
-            while True:
-                received_data = peer_socket.recv(buf_size)
-                piece_block += received_data
-                if len(received_data) < buf_size and len(piece_block) >= piece_block_size:
-                    break
+            for piece_block_size in piece_block_sizes:
+                buf_size = 1024
+                piece_block = b""
+                while True:
+                    if piece_block_size - len(piece_block) < buf_size:
+                        piece_block += peer_socket.recv(piece_block_size - len(piece_block))
+                        break
+                    received_data = peer_socket.recv(buf_size)
+                    piece_block += received_data
 
-            piece_blocks.append(piece_block[13:])
+                piece_blocks.append(piece_block[13:])
 
         downloaded_piece = b"".join(piece_blocks)
         downloaded_piece_hash = hashlib.sha1(downloaded_piece).hexdigest()
@@ -274,7 +281,7 @@ def perform_extension_handshake(meta_info: dict) -> tuple[socket, dict]:
     peer_list: list = get_peer_list(meta_info)
     peer_socket, handshake_response = perform_handshake(meta_info, peer_list, True)
     peer_response_id = handshake_response[-20:].hex()
-    bitfield_message = peer_socket.recv(6)
+    bitfield_message = get_peer_response(peer_socket)
     peer_reserved_bytes = int.from_bytes(handshake_response[20:28], 'big')
     if peer_reserved_bytes != 0:
         handshake_dict = {"m": {"ut_metadata": 1}}
@@ -285,7 +292,8 @@ def perform_extension_handshake(meta_info: dict) -> tuple[socket, dict]:
                                 + int.to_bytes(0, 1, 'big')
                                 + xt_handshake_dict)
         peer_socket.sendall(xt_handshake_message)
-        xt_handshake_response: bytes = peer_socket.recv(1024)
+        #xt_handshake_response: bytes = peer_socket.recv(1024)
+        xt_handshake_response: bytes = get_peer_response(peer_socket)
         handshake_dict = decode_bencoded(xt_handshake_response[6:])
         if "m" not in handshake_dict or "ut_metadata" not in handshake_dict["m"]:
             raise Exception(f"Invalid extension handshake response! {handshake_dict} | {xt_handshake_response}")
@@ -303,7 +311,8 @@ def get_magnet_info(meta_info: dict, ext_handshake_dict: dict, peer_socket: sock
                        + int.to_bytes(message_id, 1, 'big')
                        + int.to_bytes(ext_message_id, 1, 'big') + message_payload)
     peer_socket.sendall(request_message)
-    magnet_info_response = peer_socket.recv(1024)
+    #magnet_info_response = peer_socket.recv(1024)
+    magnet_info_response = get_peer_response(peer_socket)
     magnet_info_dict = decode_bencoded(magnet_info_response[6:])
     metadata_piece_size = magnet_info_dict['total_size']
     metadata_piece_dict = decode_bencoded(magnet_info_response[-metadata_piece_size:])
@@ -339,7 +348,7 @@ def process_base_command(command: str) -> None:
         else:
             peer_list: list = get_peer_list(meta_info)
             peer_socket, handshake_response = perform_handshake(meta_info, peer_list)
-            bitfield_message: bytes = peer_socket.recv(20)
+            bitfield_message: bytes = get_peer_response(peer_socket)
 
             if command == "handshake":
                 peer_response_id = handshake_response[-20:].hex()
@@ -350,7 +359,7 @@ def process_base_command(command: str) -> None:
                 interested_message = (int.to_bytes(1, 4, 'big')
                                       + int.to_bytes(2, 1, 'big'))
                 peer_socket.sendall(interested_message)
-                unchoke_message: bytes = peer_socket.recv(5)
+                unchoke_message: bytes = get_peer_response(peer_socket)
                 piece_data: bytes = download_piece(meta_info, peer_socket, piece_index)
                 piece_outfile.write_bytes(piece_data)
                 print(f"piece downloaded to {piece_outfile}")
@@ -358,7 +367,7 @@ def process_base_command(command: str) -> None:
                 interested_message = (int.to_bytes(1, 4, 'big')
                                       + int.to_bytes(2, 1, 'big'))
                 peer_socket.sendall(interested_message)
-                unchoke_message: bytes = peer_socket.recv(5)
+                unchoke_message: bytes = get_peer_response(peer_socket)
                 download_file(meta_info, peer_socket)
                 print("torrent file download completed.")
             peer_socket.close()
@@ -394,7 +403,7 @@ def process_magnet_command(command: str) -> None:
             interested_message = (int.to_bytes(1, 4, 'big')
                                   + int.to_bytes(2, 1, 'big'))
             peer_socket.sendall(interested_message)
-            unchoke_message: bytes = peer_socket.recv(5)
+            unchoke_message: bytes = get_peer_response(peer_socket)
             magnet_piece_data: bytes = download_piece(magnet_info, peer_socket, piece_index)
             piece_outfile.write_bytes(magnet_piece_data)
             print(f"magnet piece downloaded to {piece_outfile}")
@@ -402,10 +411,16 @@ def process_magnet_command(command: str) -> None:
             interested_message = (int.to_bytes(1, 4, 'big')
                                   + int.to_bytes(2, 1, 'big'))
             peer_socket.sendall(interested_message)
-            unchoke_message: bytes = peer_socket.recv(5)
+            unchoke_message: bytes = get_peer_response(peer_socket)
             download_file(magnet_info, peer_socket)
             print("torrent magnet file download completed.")
         peer_socket.close()
+
+def get_peer_response(peer_socket: socket) -> bytes:
+    peer_response_length_header = peer_socket.recv(4)
+    response_size = int.from_bytes(peer_response_length_header, 'big')
+    peer_response = peer_response_length_header + peer_socket.recv(response_size)
+    return peer_response
 
 def main():
     command = sys.argv[1]
