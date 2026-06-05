@@ -60,15 +60,33 @@ def main():
 
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
-        first_char = chr(bencoded_value[0])
-
-        if not first_char.isdigit() and not first_char.isalpha():
-            raise ValueError(f"Invalid encoding type: {first_char} | {bencoded_value}")
-
-        decoded_value = decode_bencoded(bencoded_value)
-        print(json.dumps(decoded_value))
+    elif command == "info":
+        meta_info_file_name = sys.argv[2]
+        if meta_info_file_name.endswith(".torrent"):
+            meta_info_file = Path(meta_info_file_name)
+            bencoded_value = meta_info_file.read_bytes()
+        else:
+            raise ValueError(f"Invalid file extension: {meta_info_file_name}")
     else:
         raise NotImplementedError(f"Unknown command {command}")
+
+    first_char = chr(bencoded_value[0])
+
+    if not first_char.isdigit() and not first_char.isalpha():
+        raise ValueError(f"Invalid encoding type: {first_char} | {bencoded_value}")
+
+    if first_char.isalpha() and first_char not in ("i", "l", "d"):
+        raise ValueError(f"Invalid encoding character: {first_char} | {bencoded_value}")
+
+    decoded_value = decode_bencoded(bencoded_value)
+
+    if command == "info" and isinstance(decoded_value, dict):
+        if "announce" in decoded_value:
+            print(f"Tracker URL: {decoded_value['announce']}")
+        if "info" in decoded_value and "length" in decoded_value["info"]:
+            print(f"Length: {decoded_value['info']['length']}")
+    else:
+        print(json.dumps(decoded_value))
 
 
 if __name__ == "__main__":
