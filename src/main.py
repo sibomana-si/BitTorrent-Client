@@ -8,7 +8,7 @@ import logging
 from urllib.parse import urlencode, quote_plus, unquote_plus
 
 
-logging.basicConfig(level=logging.DEBUG, stream=sys.stdout)
+logging.basicConfig(level=logging.DEBUG, stream=sys.stderr)
 logger = logging.getLogger(__name__)
 
 
@@ -132,13 +132,13 @@ def get_peer_list(meta_info: dict) -> list:
     peer_id = '00112233445566778899'
     peer_list = []
     tracker_url = meta_info["Tracker URL"]
-    info_hash = meta_info["Info Hash"]
+    info_hash = meta_info["Info Hash"] if type(meta_info["Info Hash"]) == bytes else meta_info["Info Hash"].digest()
     port = 6881
     uploaded = downloaded = 0
     left = meta_info["Length"]
     compact = 1
     tracker_params = {
-        "info_hash": info_hash.digest(),
+        "info_hash": info_hash,
         "peer_id": peer_id,
         "port": port,
         "uploaded": uploaded,
@@ -176,13 +176,13 @@ def connect_to_peer(peer_socket: socket.socket, peer_index: int, peer_list: list
             connect_to_peer(peer_socket, peer_index + 1, peer_list)
 
 
-def perform_handshake(meta_info: dict, peer_list: list) -> tuple[socket.socket, bytes]:
+def perform_handshake(meta_info: dict, peer_list: list, magnet: bool=False) -> tuple[socket.socket, bytes]:
     try:
         peer_id = '00112233445566778899'
         protocol_name = b"BitTorrent protocol"
         protocol_name_length = len(protocol_name)
-        reserved_bytes = 0
-        info_hash = meta_info["Info Hash"]
+        reserved_bytes = 1048576 if magnet else 0
+        info_hash = meta_info["Info Hash"] if type(meta_info["Info Hash"]) == bytes else meta_info["Info Hash"].digest()
 
         peer_socket: socket.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         connect_to_peer(peer_socket, 0, peer_list)
@@ -191,7 +191,7 @@ def perform_handshake(meta_info: dict, peer_list: list) -> tuple[socket.socket, 
                 protocol_name_length.to_bytes(1, "big")
                 + protocol_name
                 + reserved_bytes.to_bytes(8, "big")
-                + info_hash.digest()
+                + info_hash
                 + peer_id.encode()
         )
 
@@ -362,6 +362,16 @@ def main():
         result = parse_magnet_link(magnet_link)
         print(f"Tracker URL: {result['Tracker URL']}")
         print(f"Info Hash: {result['Info Hash']}")
+    elif command == "magnet_handshake":
+        magnet_link = sys.argv[2]
+        meta_info = parse_magnet_link(magnet_link)
+        meta_info["Info Hash"] = int(meta_info["Info Hash"], 16).to_bytes(20, 'big')
+        meta_info["Length"] = 999 # arbitrary value
+        peer_list = get_peer_list(meta_info)
+        peer_socket, handshake_response = perform_handshake(meta_info, peer_list, True)
+        peer_response_id = handshake_response[-20:].hex()
+        print(f"Peer ID: {peer_response_id}")
+        peer_socket.close()
     else:
         raise NotImplementedError(f"Unknown command {command}")
 
