@@ -180,7 +180,7 @@ def connect_to_peer(peer_socket: socket.socket, peer_index: int, peer_list: list
 
 def perform_handshake(meta_info: dict, peer_list: list, magnet: bool=False) -> tuple[socket.socket, bytes]:
     try:
-        peer_id = '00112233445566778899'
+        peer_id = '00112233445566998877'
         protocol_name = b"BitTorrent protocol"
         protocol_name_length = len(protocol_name)
         reserved_bytes = 1048576 if magnet else 0
@@ -371,26 +371,27 @@ def main():
         meta_info["Length"] = 999 # arbitrary value
         peer_list = get_peer_list(meta_info)
         peer_socket, handshake_response = perform_handshake(meta_info, peer_list, True)
-        print(f"handshake response: {handshake_response}")
         peer_response_id = handshake_response[-20:].hex()
         print(f"Peer ID: {peer_response_id}")
-        bitfield_message = peer_socket.recv(20)
-        print(f"bitfield: {bitfield_message}")
+        bitfield_message = peer_socket.recv(6)
         peer_reserved_bytes = int.from_bytes(handshake_response[20:28], 'big')
-        print(f"peer_reserved_bytes: {peer_reserved_bytes} | {handshake_response[20:28]}")
         if peer_reserved_bytes != 0:
             handshake_dict = {"m": {"ut_metadata": 1}}
             xt_handshake_dict: bytes = bencode_info_dict(handshake_dict)
             xt_handshake_dict_size = len(xt_handshake_dict)
-            print(f"xt_handshake_dict: {xt_handshake_dict} | {len(xt_handshake_dict)}")
             xt_handshake_message = (int.to_bytes(2 + xt_handshake_dict_size, 4, 'big')
                                     + int.to_bytes(20, 1, 'big')
                                     + int.to_bytes(0, 1, 'big')
                                     + xt_handshake_dict)
-            print(f"xt_handshake_message: {xt_handshake_message} | {len(xt_handshake_message)}")
             peer_socket.sendall(xt_handshake_message)
-            xt_handshake_response: bytes = peer_socket.recv(20)
-            print(f"xt_handshake_response: {xt_handshake_response} | {len(xt_handshake_response)}")
+            xt_handshake_response: bytes = peer_socket.recv(1024)
+            handshake_dict = decode_bencoded(xt_handshake_response[6:])
+            if 'm' in handshake_dict and 'ut_metadata' in handshake_dict['m']:
+                print(f"Peer Metadata Extension ID: {handshake_dict['m']['ut_metadata']}")
+            else:
+                raise Exception(f"Invalid extension handshake response! {handshake_dict} | {xt_handshake_response}")
+        else:
+            print("Peer does not support metadata extension!")
         peer_socket.close()
     else:
         raise NotImplementedError(f"Unknown command {command}")
