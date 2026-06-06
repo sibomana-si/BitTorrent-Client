@@ -1,3 +1,18 @@
+"""
+BitTorrent Client Implementation.
+
+This module provides a complete BitTorrent client implementation with support for:
+- Bencode encoding and decoding
+- Torrent file parsing and metadata extraction
+- Peer discovery through tracker communication
+- Standard BitTorrent handshake protocol
+- Piece downloading and verification
+- Magnet link parsing and metadata extension protocol
+
+The implementation follows the BitTorrent protocol specifications and supports
+both standard .torrent file downloads and magnet link-based downloads.
+"""
+
 import json
 import sys
 import hashlib
@@ -8,6 +23,25 @@ from urllib.parse import urlencode, quote_plus, unquote_plus
 
 
 def get_bencoded(command: str) -> bytes:
+    """
+    Retrieve and load bencoded data based on the command type.
+
+    Handles loading bencoded data from different sources depending on the command:
+    - 'decode': from command line argument
+    - 'info', 'peers', 'handshake': from torrent file at argv[2]
+    - 'download_piece', 'download': from torrent file at argv[4]
+
+    Args:
+        command: The command type being executed (str).
+
+    Returns:
+        The bencoded data as bytes.
+
+    Raises:
+        NotImplementedError: If the command is not recognized.
+        ValueError: If the torrent file has an invalid extension.
+    """
+    
     if command == "decode":
         bencoded_value = sys.argv[2].encode()
     elif command in ("info", "peers", "handshake"):
@@ -22,6 +56,19 @@ def get_bencoded(command: str) -> bytes:
 
 
 def validate_bencoded(bencoded_value: bytes) -> None:
+    """
+    Validate that bencoded data has a valid starting character.
+
+    Bencoded data must start with a digit (for strings) or a letter (i for integers,
+    l for lists, d for dictionaries).
+
+    Args:
+        bencoded_value: The bencoded data to validate (bytes).
+
+    Raises:
+        ValueError: If the first character is not a digit or valid encoding type.
+    """
+    
     first_char = chr(bencoded_value[0])
 
     if not first_char.isdigit() and not first_char.isalpha():
@@ -32,6 +79,22 @@ def validate_bencoded(bencoded_value: bytes) -> None:
 
 
 def validate_metainfo_filename(meta_info_file_name: str) -> bytes:
+    """
+    Load and validate a torrent metainfo file.
+
+    Ensures the file has a .torrent extension and reads its binary content.
+
+    Args:
+        meta_info_file_name: Path to the torrent file to validate (str).
+
+    Returns:
+        The bencoded content of the torrent file as bytes.
+
+    Raises:
+        ValueError: If the file does not have a .torrent extension.
+        FileNotFoundError: If the file does not exist.
+    """
+    
     if meta_info_file_name.endswith(".torrent"):
         meta_info_file = Path(meta_info_file_name)
         bencoded_value = meta_info_file.read_bytes()
@@ -41,6 +104,29 @@ def validate_metainfo_filename(meta_info_file_name: str) -> bytes:
 
 
 def decode_bencoded(bencoded_value: bytes) -> str | int | list | dict:
+    """
+    Decode bencode-encoded data into native Python objects.
+
+    Parses bencoded strings, integers, lists, and dictionaries following the
+    bencode specification. Handles both ASCII and binary data.
+
+    Bencode format:
+    - Integers: i<number>e (e.g., i42e)
+    - Strings: <length>:<string> (e.g., 4:spam)
+    - Lists: l<items>e (e.g., li1ei2ee)
+    - Dictionaries: d<key><value>...e (e.g., d3:key5:valuee)
+
+    Args:
+        bencoded_value: The bencoded data to decode (bytes).
+
+    Returns:
+        The decoded Python object (str, int, list, or dict).
+
+    Raises:
+        ValueError: If the bencoded data is malformed (e.g., invalid dict with
+                    odd number of items or non-string keys).
+    """
+    
     decoded_container = []
     temp_list = []
     bencoded_length = len(bencoded_value)
@@ -93,6 +179,23 @@ def decode_bencoded(bencoded_value: bytes) -> str | int | list | dict:
 
 
 def bencode_info_dict(info_dict: dict) -> bytes:
+    """
+    Encode a dictionary into bencode format.
+
+    Recursively encodes dictionaries and their nested values into the bencode
+    format used for torrent metadata serialization.
+
+    Args:
+        info_dict: Dictionary to encode. Values can be integers, strings, bytes,
+                    or nested dictionaries.
+
+    Returns:
+        The bencoded representation of the dictionary as bytes.
+
+    Raises:
+        ValueError: If a value type is not supported (int, str, bytes, or dict).
+    """
+    
     bencoded_info_dict = b"d"
     for key, value in info_dict.items():
         bencoded_info_dict += f"{len(key)}:{key}".encode()
@@ -111,6 +214,24 @@ def bencode_info_dict(info_dict: dict) -> bytes:
 
 
 def get_meta_info(bencoded_value: bytes) -> dict:
+    """
+    Extract metadata from a bencoded torrent file.
+
+    Parses a .torrent file and extracts key metadata including tracker URL,
+    file length, info hash, piece length, and individual piece hashes.
+
+    Args:
+        bencoded_value: The bencoded content of a torrent file (bytes).
+
+    Returns:
+        A dictionary containing:
+        - "Tracker URL": URL of the tracker
+        - "Length": Total file size in bytes
+        - "Info Hash": SHA-1 hash object of the info dictionary
+        - "Piece Length": Size of each piece in bytes
+        - "Piece Hashes": List of hex-encoded SHA-1 hashes for each piece
+    """
+    
     meta_info = {}
     decoded_value: dict = decode_bencoded(bencoded_value)
     meta_info["Tracker URL"] = decoded_value["announce"]
@@ -126,6 +247,24 @@ def get_meta_info(bencoded_value: bytes) -> dict:
 
 
 def get_peer_list(meta_info: dict) -> list:
+    """
+    Retrieve a list of peer addresses from the tracker.
+
+    Contacts the tracker server with torrent metadata and retrieves a list of
+    peers that have or are downloading the torrent. Uses compact mode to
+    download peer addresses efficiently.
+
+    Args:
+        meta_info: Dictionary with torrent metadata including "Tracker URL"
+                    and "Info Hash" keys.
+
+    Returns:
+        List of peer addresses in the format "IP:port" (e.g., ["192.0.2.1:6881"]).
+
+    Raises:
+        requests.RequestException: If the tracker request fails.
+    """
+    
     peer_list = []
     tracker_url = meta_info["Tracker URL"]
     info_hash = meta_info["Info Hash"] if type(meta_info["Info Hash"]) == bytes else meta_info["Info Hash"].digest()
@@ -160,6 +299,21 @@ def get_peer_list(meta_info: dict) -> list:
 
 
 def connect_to_peer(peer_socket: socket.socket, peer_index: int, peer_list: list) -> None:
+    """
+    Establish a TCP connection to a peer with fallback retry logic.
+
+    Attempts to connect to the peer at the given index. If the connection fails
+    and there are more peers, recursively tries the next peer in the list.
+
+    Args:
+        peer_socket: The socket object to use for the connection.
+        peer_index: Index of the peer in the peer_list to connect to (int).
+        peer_list: List of peer addresses in format "IP:port" (list of str).
+
+    Raises:
+        Exception: If unable to connect to any peer in the list.
+    """
+    
     try:
         peer_ip, peer_port = peer_list[peer_index].split(":")
         peer_socket.connect((peer_ip, int(peer_port)))
@@ -173,6 +327,26 @@ def connect_to_peer(peer_socket: socket.socket, peer_index: int, peer_list: list
 
 
 def perform_handshake(meta_info: dict, peer_list: list, magnet: bool=False) -> tuple[socket.socket, bytes]:
+    """
+    Perform the BitTorrent protocol handshake with a peer.
+
+    Establishes a connection to a peer and executes the handshake protocol
+    to identify the client and verify the torrent. The handshake message
+    contains the protocol name, reserved bytes, info hash, and peer ID.
+
+    Args:
+        meta_info: Dictionary with torrent metadata including "Info Hash".
+        peer_list: List of peer addresses to attempt connection to.
+        magnet: If True, sets reserved bytes to indicate extension support (default: False).
+
+    Returns:
+        Tuple of (connected_socket, handshake_response) where handshake_response
+        is the 68-byte response from the peer.
+
+    Raises:
+        Exception: If handshake fails or unable to connect to any peer.
+    """
+    
     try:
         protocol_name = b"BitTorrent protocol"
         protocol_name_length = len(protocol_name)
@@ -199,6 +373,26 @@ def perform_handshake(meta_info: dict, peer_list: list, magnet: bool=False) -> t
     
 
 def download_piece(meta_info: dict, peer_socket: socket.socket, piece_index: int) -> bytes:
+    """
+    Download and verify a specific piece from a peer.
+
+    Downloads a piece by segmenting it into 16KB blocks and requesting them
+    from the peer using the BitTorrent protocol. Verifies the downloaded piece
+    against its SHA-1 hash from the torrent metadata.
+
+    Args:
+        meta_info: Dictionary with torrent metadata containing piece information.
+        peer_socket: Connected socket to the peer.
+        piece_index: The index of the piece to download (int).
+
+    Returns:
+        The downloaded piece data as bytes.
+
+    Raises:
+        ValueError: If the downloaded piece hash doesn't match the expected hash.
+        Exception: If the download fails.
+    """
+    
     try:
         print(f"downloading piece_index: {piece_index} ...")
         block_size = 2 ** 14
@@ -266,6 +460,21 @@ def download_piece(meta_info: dict, peer_socket: socket.socket, piece_index: int
 
 
 def download_file(meta_info: dict, peer_socket: socket.socket) -> None:
+    """
+    Download an entire file specified by a torrent, piece by piece.
+
+    Downloads all pieces of the torrent and writes them to the output file
+    specified in sys.argv[3]. Tracks progress and reports downloaded size
+    for each piece.
+
+    Args:
+        meta_info: Dictionary with complete torrent metadata.
+        peer_socket: Connected socket to the peer.
+
+    Raises:
+        Exception: If the download fails or pieces cannot be verified.
+    """
+    
     try:
         torrent_outfile = Path(sys.argv[3])
         print(f"downloading to {torrent_outfile} ...")
@@ -286,6 +495,24 @@ def download_file(meta_info: dict, peer_socket: socket.socket) -> None:
 
 
 def parse_magnet_link(magnetic_link: str) -> dict:
+    """
+    Parse a magnet link and extract torrent metadata.
+
+    Extracts the info hash and tracker URL from a magnet URI following the
+    magnet link specification (RFC 6320).
+
+    Args:
+        magnetic_link: The magnet link URI string (e.g., "magnet:?xt=urn:btih:...&tr=...").
+
+    Returns:
+        Dictionary with:
+        - "Info Hash": The hex-encoded info hash (40 characters)
+        - "Tracker URL": The tracker announce URL
+
+    Raises:
+        Exception: If the link is invalid or missing required parameters.
+    """
+    
     meta_info = {}
     if magnetic_link.startswith("magnet:?xt="):
         info_hash_index = magnetic_link.find("xt=urn:btih:")
@@ -303,6 +530,28 @@ def parse_magnet_link(magnetic_link: str) -> dict:
 
 
 def perform_extension_handshake(meta_info: dict) -> tuple[socket.socket, dict]:
+    """
+    Perform the BitTorrent extension handshake for metadata exchange.
+
+    Establishes a connection to a peer using a magnet link and negotiates
+    the metadata extension protocol (BEP 9). This allows downloading torrent
+    metadata from the peer without having a .torrent file.
+
+    Args:
+        meta_info: Dictionary with parsed magnet link data including "Info Hash"
+                    and "Tracker URL".
+
+    Returns:
+        Tuple of (peer_socket, handshake_dict) where handshake_dict contains:
+        - "m": Dictionary of extension IDs supported by peer
+        - "ut_metadata": The extension ID for metadata exchange
+        - "Peer ID": The peer's identifier
+
+    Raises:
+        Exception: If the peer doesn't support metadata extension or
+        handshake negotiation fails.
+    """
+    
     meta_info["Info Hash"] = int(meta_info["Info Hash"], 16).to_bytes(20, 'big')
     meta_info["Length"] = 999  # arbitrary value
     peer_list: list = get_peer_list(meta_info)
@@ -330,6 +579,27 @@ def perform_extension_handshake(meta_info: dict) -> tuple[socket.socket, dict]:
 
 
 def get_magnet_info(meta_info: dict, ext_handshake_dict: dict, peer_socket: socket.socket) -> dict:
+    """
+    Retrieve complete torrent metadata from a magnet link peer.
+
+    Requests the torrent metadata from the peer using the metadata extension
+    protocol and extracts all necessary information (tracker, length, hash, pieces).
+
+    Args:
+        meta_info: Dictionary with magnet link metadata including "Tracker URL".
+        ext_handshake_dict: Dictionary from extension handshake containing the
+                            ut_metadata extension ID.
+        peer_socket: Connected socket to the peer.
+
+    Returns:
+        Dictionary with complete torrent metadata:
+        - "Tracker URL": URL of the tracker
+        - "Length": Total file size in bytes
+        - "Info Hash": SHA-1 hash object of the info dictionary
+        - "Piece Length": Size of each piece in bytes
+        - "Piece Hashes": List of hex-encoded SHA-1 hashes for each piece
+    """
+    
     message_id = 20
     ext_message_id = ext_handshake_dict['m']['ut_metadata']
     payload_dict = {'msg_type': 0, 'piece': 0}
@@ -361,6 +631,24 @@ def get_magnet_info(meta_info: dict, ext_handshake_dict: dict, peer_socket: sock
 
 
 def process_base_command(command: str) -> None:
+    """
+    Process commands for standard .torrent file operations.
+
+    Handles the following commands:
+    - "decode": Decode and display bencoded data
+    - "info": Extract and display torrent metadata
+    - "peers": List all available peers
+    - "handshake": Perform handshake and display peer ID
+    - "download_piece": Download a specific piece to a file
+    - "download": Download the entire torrent file
+
+    Args:
+        command: The command to execute (str).
+
+    Raises:
+        Exception: If the command execution fails.
+    """
+    
     bencoded_value = get_bencoded(command)
     validate_bencoded(bencoded_value)
     if command == "decode":
@@ -408,6 +696,23 @@ def process_base_command(command: str) -> None:
 
 
 def process_magnet_command(command: str) -> None:
+    """
+    Process commands for magnet link-based operations.
+
+    Handles the following commands:
+    - "magnet_parse": Parse and display magnet link information
+    - "magnet_handshake": Perform extension handshake and display peer info
+    - "magnet_info": Retrieve and display complete metadata from peer
+    - "magnet_download_piece": Download a specific piece via magnet link
+    - "magnet_download": Download the entire file via magnet link
+
+    Args:
+        command: The magnet-based command to execute (str).
+
+    Raises:
+        Exception: If the command execution fails.
+    """
+    
     if command in ("magnet_parse", "magnet_handshake", "magnet_info"):
         magnet_link = sys.argv[2]
     else:
@@ -455,6 +760,20 @@ def process_magnet_command(command: str) -> None:
             
 
 def get_peer_response(peer_socket: socket.socket) -> bytes:
+    """
+    Receive a complete message from a peer.
+
+    BitTorrent messages are prefixed with a 4-byte length header that specifies
+    the size of the payload. This function reads the header and then receives
+    the payload data.
+
+    Args:
+        peer_socket: Connected socket to the peer.
+
+    Returns:
+        The complete message including header and payload as bytes.
+    """
+    
     peer_response_length_header = peer_socket.recv(4)
     response_size = int.from_bytes(peer_response_length_header, 'big')
     peer_response = peer_response_length_header + peer_socket.recv(response_size)
@@ -462,6 +781,17 @@ def get_peer_response(peer_socket: socket.socket) -> bytes:
 
 
 def main():
+    """
+    Entry point for the BitTorrent client application.
+
+    Routes the command specified in sys.argv[1] to the appropriate handler:
+    - Base torrent commands (decode, info, peers, etc.)
+    - Magnet link commands (magnet_parse, magnet_info, etc.)
+
+    Raises:
+        Exception: If the command is not recognized.
+    """
+    
     command = sys.argv[1]
     base_commands = {"decode", "info", "peers", "handshake", "download_piece", "download"}
     magnet_commands = {"magnet_parse", "magnet_handshake", "magnet_info", "magnet_download_piece", "magnet_download"}
