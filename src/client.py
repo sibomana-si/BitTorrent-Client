@@ -123,7 +123,6 @@ class TorrentClient:
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
             conn.connect(peers)
             conn.handshake(magnet.info_hash, magnet=True)
-            conn.recv_message() # bitfield
             ext_id = conn.extension_handshake()
             yield conn, ext_id
 

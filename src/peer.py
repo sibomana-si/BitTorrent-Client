@@ -18,9 +18,12 @@ from src.constants import (
     BLOCK_SIZE,
     CONNECT_TIMEOUT,
     MAGNET_RESERVED,
+    MSG_CHOKE,
     MSG_EXTENSION,
     MSG_INTERESTED,
+    MSG_PIECE,
     MSG_REQUEST,
+    MSG_UNCHOKE,
     PEER_ID,
     PIPELINE_DEPTH,
     PROTOCOL_NAME,
@@ -116,6 +119,27 @@ class PeerConnection:
             raise PeerProtocolError(f"Peer announced an oversized message: {length} bytes")
         return header + self._recv_exact(length)
 
+    def _recv_until(self, wanted_id: int) -> bytes:
+        """Read frames until one with id ``wanted_id`` arrives (header included).
+
+        Peers freely interleave keep-alives (length-0 frames) and informational
+        messages (``have``, ``bitfield``, repeated ``unchoke``) with the reply we
+        are waiting for; the old "read exactly one frame" code would misread
+        those as the awaited message. We consume and ignore anything unrelated,
+        and treat a ``choke`` while waiting as a protocol failure.
+        """
+
+        while True:
+            message = self.recv_message()
+            length = int.from_bytes(message[:4], "big")
+            if length == 0:
+                continue # keep-alive: no id, nothing to do
+            msg_id = message[4]
+            if msg_id == wanted_id:
+                return message
+            if msg_id == MSG_CHOKE:
+                raise PeerProtocolError("Peer choked the connection")
+
     def send_interested(self) -> None:
         """Announce interest and wait for the peer to unchoke us."""
 
@@ -148,7 +172,7 @@ class PeerConnection:
         payload = bencodepy.encode({"m": {"ut_metadata": 1}})
         self._send_extension(extension_id=0, payload=payload)
 
-        response = self.recv_message()
+        response = self._recv_until(MSG_EXTENSION)
         handshake = bencodepy.decode(response[6:])
         if b"m" not in handshake or b"ut_metadata" not in handshake[b"m"]:
             raise PeerProtocolError(f"Invalid extension handshake response: {handshake}")
@@ -161,7 +185,7 @@ class PeerConnection:
         payload = bencodepy.encode({"msg_type": 0, "piece": 0})
         self._send_extension(extension_id, payload)
 
-        response = self.recv_message()
+        response = self._recv_until(MSG_EXTENSION)
         header = _decode_leading(response[6:])
         total_size = header[b"total_size"]
         return response[-total_size:]
@@ -186,7 +210,7 @@ class PeerConnection:
             for block in batch:
                 self._socket.sendall(self._request_message(block))
             for _ in batch:
-                payloads.append(self.recv_message()[_PIECE_HEADER_LEN:])
+                payloads.append(self._recv_until(MSG_PIECE)[_PIECE_HEADER_LEN:])
 
         piece = b"".join(payloads)
         expected = meta.piece_hashes_hex[piece_index]

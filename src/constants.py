@@ -30,6 +30,9 @@ MAGNET_RESERVED = (1 << 20).to_bytes(8, "big")
 MAGNET_STUB_LENGTH = 999
 
 # Peer wire message ids used by this client.
+MSG_CHOKE = 0
+MSG_UNCHOKE = 1
 MSG_INTERESTED = 2
 MSG_REQUEST = 6
+MSG_PIECE = 7
 MSG_EXTENSION = 20
