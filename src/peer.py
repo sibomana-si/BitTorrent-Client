@@ -32,9 +32,13 @@ from src.reporting import NullReporter, ProgressReporter
 
 
 _HANDSHAKE_LEN = 68
+
 # A piece message is a 4-byte length, 1-byte id, 4-byte index, 4-byte begin,
 # then the block payload - 13 bytes of framing before the data.
 _PIECE_HEADER_LEN = 13
+
+# Upper bound on a single message body.
+_MAX_MESSAGE_LEN = 2**20
 
 
 class PeerConnection:
@@ -108,6 +112,8 @@ class PeerConnection:
 
         header = self._recv_exact(4)
         length = int.from_bytes(header, "big")
+        if length > _MAX_MESSAGE_LEN:
+            raise PeerProtocolError(f"Peer announced an oversized message: {length} bytes")
         return header + self._recv_exact(length)
 
     def send_interested(self) -> None:
