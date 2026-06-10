@@ -14,7 +14,7 @@ from pathlib import Path
 
 import bencodepy
 
-from src.errors import InvalidTorrentError
+from src.errors import InvalidTorrentError, PeerProtocolError
 from src.models import TorrentMetadata
 
 
@@ -41,10 +41,17 @@ def load_torrent_file(path: str) -> TorrentMetadata:
     return _build(decoded[b"announce"].decode(), info, info_hash)
 
 
-def metadata_from_raw_info(tracker_url: str, raw_info: bytes) -> TorrentMetadata:
-    """Build metadata from a raw ``info`` dictionary received from a peer."""
+def metadata_from_raw_info(tracker_url: str, raw_info: bytes, expected_hash: bytes | None = None) -> TorrentMetadata:
+    """Build metadata from a raw ``info`` dictionary received from a peer.
+
+    When ``expected_hash`` is given (the magnet's info hash), the received bytes
+    are verified against it before being trusted, so a peer cannot substitute
+    forged metadata for the torrent we asked for.
+    """
 
     info_hash = hashlib.sha1(raw_info).digest()
+    if expected_hash is not None and info_hash != expected_hash:
+        raise PeerProtocolError(f"Metadata info hash mismatch: {info_hash.hex()} != {expected_hash.hex()}")
     try:
         info = bencodepy.decode(raw_info)
         return _build(tracker_url, info, info_hash)

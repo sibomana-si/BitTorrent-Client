@@ -94,18 +94,18 @@ class TorrentClient:
     def magnet_metadata(self, magnet: MagnetLink) -> TorrentMetadata:
         with self._magnet_connection(magnet) as (conn, ext_id):
             raw_info = conn.fetch_metadata(ext_id)
-        return metadata_from_raw_info(magnet.tracker_url, raw_info)
+        return metadata_from_raw_info(magnet.tracker_url, raw_info, magnet.info_hash)
 
     def magnet_download_piece_to_file(self, magnet: MagnetLink, piece_index: int, output_path: str) -> None:
         with self._magnet_connection(magnet) as (conn, ext_id):
-            meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id))
+            meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
             conn.send_interested()
             piece = conn.download_piece(meta, piece_index)
         Path(output_path).write_bytes(piece)
 
     def magnet_download_to_file(self, magnet: MagnetLink, output_path: str) -> None:
         with self._magnet_connection(magnet) as (conn, ext_id):
-            meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id))
+            meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
             conn.send_interested()
             data = self._download_all_pieces(conn, meta, output_path)
         Path(output_path).write_bytes(data)
