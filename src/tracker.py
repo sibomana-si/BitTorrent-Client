@@ -13,7 +13,7 @@ from src.models import Peer
 
 
 _PEER_RECORD_LEN = 6 # 4 bytes IPv4 + 2 bytes port
-
+_HTTP_TIMEOUT = (5, 15) # (connect, read) timeout in seconds
 
 class TrackerClient:
     """Announces to a tracker and returns the peers it reports."""
@@ -36,7 +36,7 @@ class TrackerClient:
         }
         url = f"{tracker_url}?{urlencode(params, quote_via=quote_plus)}"
         try:
-            response = requests.get(url)
+            response = requests.get(url, timeout=_HTTP_TIMEOUT)
             response.raise_for_status()
         except requests.RequestException as exc:
             raise TrackerError(f"Tracker request failed: {exc}") from exc
