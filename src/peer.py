@@ -145,7 +145,7 @@ class PeerConnection:
 
         message = (1).to_bytes(4, "big") + MSG_INTERESTED.to_bytes(1, "big")
         self._socket.sendall(message)
-        self.recv_message() # unchoke
+        self._recv_until(MSG_UNCHOKE)
 
     def _recv_exact(self, count: int) -> bytes:
         """Receive exactly ``count`` bytes, looping over short reads."""

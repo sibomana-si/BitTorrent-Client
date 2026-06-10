@@ -80,7 +80,6 @@ class TorrentClient:
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
             conn.connect(self.get_peers(meta))
             conn.handshake(meta.info_hash)
-            conn.recv_message() # bitfield
             conn.send_interested()
             yield conn
 
