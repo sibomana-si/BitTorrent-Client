@@ -13,6 +13,7 @@ import socket
 from collections.abc import Iterator, Sequence
 
 import bencodepy
+from future.backports.email.mime import message
 
 from src.constants import (
     BLOCK_SIZE,
@@ -205,14 +206,31 @@ class PeerConnection:
         self._reporter.report(f"downloading piece_index: {piece_index} ...")
         blocks = self._block_requests(meta, piece_index)
 
-        payloads: list[bytes] = []
+        # Key returned blocks by their offset so out-of-order responses are
+        # reassembled correclty, and reject any block that does not match a
+        # request we actually made (wrong piece, unexpected offset/length).
+        wanted = {begin: length for _index, begin, length in blocks}
+        chunks: dict[int, bytes] = {}
         for batch in _batched(blocks, PIPELINE_DEPTH):
             for block in batch:
                 self._socket.sendall(self._request_message(block))
             for _ in batch:
-                payloads.append(self._recv_until(MSG_PIECE)[_PIECE_HEADER_LEN:])
+                message = self._recv_until(MSG_PIECE)
+                index = int.from_bytes(message[5:9], "big")
+                begin = int.from_bytes(message[9:13], "big")
+                block_data = message[_PIECE_HEADER_LEN:]
+                if index != piece_index or begin not in wanted:
+                    raise PeerProtocolError(f"Peer returned an unexpected block: index={index} begin={begin}")
+                if len(block_data) != wanted[begin]:
+                    raise PeerProtocolError(
+                        f"Peer returned a short block at begin={begin}: "
+                        f"{len(block_data)} != {wanted[begin]}"
+                    )
+                chunks[begin] = block_data
 
-        piece = b"".join(payloads)
+        if chunks.keys() != wanted.keys():
+            raise PeerProtocolError("Peer did not return every requested block")
+        piece = b"".join(chunks[begin] for _index, begin, _length in blocks)
         expected = meta.piece_hashes_hex[piece_index]
         actual = hashlib.sha1(piece).hexdigest()
         if actual != expected:
