@@ -44,9 +44,12 @@ def load_torrent_file(path: str) -> TorrentMetadata:
 def metadata_from_raw_info(tracker_url: str, raw_info: bytes) -> TorrentMetadata:
     """Build metadata from a raw ``info`` dictionary received from a peer."""
 
-    info = bencodepy.decode(raw_info)
     info_hash = hashlib.sha1(raw_info).digest()
-    return _build(tracker_url, info, info_hash)
+    try:
+        info = bencodepy.decode(raw_info)
+        return _build(tracker_url, info, info_hash)
+    except (bencodepy.BencodeDecodeError, KeyError, TypeError) as exc:
+        raise InvalidTorrentError(f"Malformed metadata received from peer: {exc}") from exc
 
 
 def _build(tracker_url: str, info: dict, info_hash: bytes) -> TorrentMetadata:
