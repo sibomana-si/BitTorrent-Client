@@ -13,6 +13,10 @@ TRACKER_PORT = 6881
 # Peers serve pieces in blocks of at most 16 KiB.
 BLOCK_SIZE = 2**14
 
+# Socket deadlines (seconds): a peer that stalls must not hang the client.
+CONNECT_TIMEOUT = 5 # establishing the TCP connection
+RECV_TIMEOUT = 30 # waiting for a single message from a connected peer
+
 # How many block requests to keep in flight at once (pipelining depth).
 PIPELINE_DEPTH = 4
 

@@ -16,13 +16,15 @@ import bencodepy
 
 from src.constants import (
     BLOCK_SIZE,
+    CONNECT_TIMEOUT,
     MAGNET_RESERVED,
     MSG_EXTENSION,
     MSG_INTERESTED,
     MSG_REQUEST,
     PEER_ID,
     PIPELINE_DEPTH,
-    PROTOCOL_NAME
+    PROTOCOL_NAME,
+    RECV_TIMEOUT
 )
 from src.errors import PeerProtocolError
 from src.models import Peer, TorrentMetadata
@@ -69,12 +71,15 @@ class PeerConnection:
         last_error: Exception | None = None
         for peer in peers:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(CONNECT_TIMEOUT)
             try:
                 sock.connect((peer.ip, peer.port))
-            except OSError as error:
+            except OSError as error:  # includes socket.timeout
                 sock.close()
                 last_error = error
                 continue
+            # Switch to the longer per-message deadline for the live connection.
+            sock.settimeout(RECV_TIMEOUT)
             self._sock = sock
             self._reporter.report(f"connected to {peer.ip}:{peer.port}")
             return
@@ -118,7 +123,10 @@ class PeerConnection:
         chunks = []
         remaining = count
         while remaining:
-            chunk = self._socket.recv(remaining)
+            try:
+                chunk = self._socket.recv(remaining)
+            except OSError as exc: # includes socket.timeout and resets
+                raise PeerProtocolError(f"Peer read failed: {exc}") from exc
             if not chunk:
                 raise PeerProtocolError("Peer closed the connection")
             chunks.append(chunk)
@@ -161,7 +169,7 @@ class PeerConnection:
         )
         self._socket.sendall(message)
 
-    def _download_piece(self, meta: TorrentMetadata, piece_index: int) -> bytes:
+    def download_piece(self, meta: TorrentMetadata, piece_index: int) -> bytes:
         """Download one piece, verify its SHA-1, and return its bytes."""
 
         self._reporter.report(f"downloading piece_index: {piece_index} ...")

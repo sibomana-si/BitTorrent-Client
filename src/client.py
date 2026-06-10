@@ -66,7 +66,7 @@ class TorrentClient:
 
     def download_piece_to_file(self, meta: TorrentMetadata, piece_index: int, output_path: str) -> None:
         with self._ready_connection(meta) as conn:
-            piece = conn._download_piece(meta, piece_index)
+            piece = conn.download_piece(meta, piece_index)
         Path(output_path).write_bytes(piece)
 
     def download_to_file(self, meta: TorrentMetadata, output_path: str) -> None:
@@ -101,7 +101,7 @@ class TorrentClient:
         with self._magnet_connection(magnet) as (conn, ext_id):
             meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id))
             conn.send_interested()
-            piece = conn._download_piece(meta, piece_index)
+            piece = conn.download_piece(meta, piece_index)
         Path(output_path).write_bytes(piece)
 
     def magnet_download_to_file(self, magnet: MagnetLink, output_path: str) -> None:
@@ -132,7 +132,7 @@ class TorrentClient:
         self._reporter.report(f"pieces to download: {len(meta.piece_hashes)}")
         pieces = []
         for piece_index in range(len(meta.piece_hashes)):
-            piece = conn._download_piece(meta, piece_index)
+            piece = conn.download_piece(meta, piece_index)
             pieces.append(piece)
             self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
         return b"".join(pieces)
