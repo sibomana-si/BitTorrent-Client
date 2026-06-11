@@ -7,6 +7,8 @@ formatting; the protocol details live in :mod:`src.peer` and :mod:`src.tracker`.
 
 from __future__ import annotations
 
+import os
+import tempfile
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
@@ -67,12 +69,12 @@ class TorrentClient:
     def download_piece_to_file(self, meta: TorrentMetadata, piece_index: int, output_path: str) -> None:
         with self._ready_connection(meta) as conn:
             piece = conn.download_piece(meta, piece_index)
-        Path(output_path).write_bytes(piece)
+        self._atomic_write(output_path, piece)
 
     def download_to_file(self, meta: TorrentMetadata, output_path: str) -> None:
         with self._ready_connection(meta) as conn:
             data = self._download_all_pieces(conn, meta, output_path)
-        Path(output_path).write_bytes(data)
+        self._atomic_write(output_path, data)
 
     @contextmanager
     def _ready_connection(self, meta: TorrentMetadata) -> Iterator[PeerConnection]:
@@ -101,14 +103,14 @@ class TorrentClient:
             meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
             conn.send_interested()
             piece = conn.download_piece(meta, piece_index)
-        Path(output_path).write_bytes(piece)
+        self._atomic_write(output_path, piece)
 
     def magnet_download_to_file(self, magnet: MagnetLink, output_path: str) -> None:
         with self._magnet_connection(magnet) as (conn, ext_id):
             meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
             conn.send_interested()
             data = self._download_all_pieces(conn, meta, output_path)
-        Path(output_path).write_bytes(data)
+        self._atomic_write(output_path, data)
 
     @contextmanager
     def _magnet_connection(self, magnet: MagnetLink) -> Iterator[tuple[PeerConnection, int]]:
@@ -124,6 +126,32 @@ class TorrentClient:
             conn.handshake(magnet.info_hash, magnet=True)
             ext_id = conn.extension_handshake()
             yield conn, ext_id
+
+    @staticmethod
+    def _atomic_write(output_path: str, data: bytes) -> None:
+        """Write ``data`` to ``output_path`` atomically and durably.
+
+        A crash or interrupt mid-write must not leave a half-written file at the
+        final path: write to a temp file in the same directory, flush+fsync, then
+        rename it into place (an atomic operation on the same filesystem). The
+        temp file is removed if anything fails before the rename.
+        """
+
+        path = Path(output_path)
+        fd, tmp_name = tempfile.mkstemp(dir=str(path.parent or "."), prefix=f".{path.name}.", suffix=".part")
+
+        try:
+            with os.fdopen(fd, "wb") as tmp:
+                tmp.write(data)
+                tmp.flush()
+                os.fsync(tmp.fileno())
+            os.replace(tmp_name, path)
+        except BaseException:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
 
     def _download_all_pieces(self, conn: PeerConnection, meta: TorrentMetadata, output_path: str) -> bytes:
         self._reporter.report(f"downloading to {output_path} ...")
