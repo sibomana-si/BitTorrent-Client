@@ -32,6 +32,9 @@ from src.reporting import NullReporter, ProgressReporter
 from src.torrent import load_torrent_file, metadata_from_raw_info
 from src.tracker import TrackerClient
 
+# How many peers to try for a single piece before giving the whole piece up.
+_PIECE_RETRIES = 3
+
 
 class TorrentClient:
     """High-level operations over a torrent or a magnet link."""
@@ -80,10 +83,9 @@ class TorrentClient:
         self._atomic_write(output_path, piece)
 
     def download_to_file(self, meta: TorrentMetadata, output_path: str) -> None:
+        peers = self.get_peers(meta)
         with self._atomic_output(output_path) as output_file:
-            with self._ready_connection(meta) as conn:
-                self._download_all_pieces(conn, meta, output_file, output_path)
-
+            self._download_with_failover(meta, output_file, output_path, peers, meta.info_hash, magnet=False)
 
     @contextmanager
     def _ready_connection(self, meta: TorrentMetadata) -> Iterator[PeerConnection]:
@@ -115,21 +117,32 @@ class TorrentClient:
         self._atomic_write(output_path, piece)
 
     def magnet_download_to_file(self, magnet: MagnetLink, output_path: str) -> None:
+        peers = self.tracker.get_peers(magnet.tracker_url, magnet.info_hash, MAGNET_STUB_LENGTH)
         with self._atomic_output(output_path) as output_file:
-            with self._magnet_connection(magnet) as (conn, ext_id):
+            with self._magnet_connection(magnet, peers) as (conn, ext_id):
                 meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
                 conn.send_interested()
-                self._download_all_pieces(conn, meta, output_file, output_path)
+                self._download_with_failover(
+                    meta,
+                    output_file,
+                    output_path,
+                    peers,
+                    magnet.info_hash,
+                    magnet=True,
+                    initial_conn=conn
+                )
 
     @contextmanager
-    def _magnet_connection(self, magnet: MagnetLink) -> Iterator[tuple[PeerConnection, int]]:
+    def _magnet_connection(self, magnet: MagnetLink, peers: list[Peer] | None = None) -> Iterator[tuple[PeerConnection, int]]:
         """A connection that has completed the extension handshake.
 
         The same socket is kept open afterwards so metadata and pieces can be
-        fetched without reconnecting.
+        fetched without reconnecting. ``peers`` may be supplied to reuse an
+        already-fetched peer list (e.g. so a download can fail over within it).
         """
 
-        peers = self.tracker.get_peers(magnet.tracker_url, magnet.info_hash, MAGNET_STUB_LENGTH)
+        if peers is None:
+            peers = self.tracker.get_peers(magnet.tracker_url, magnet.info_hash, MAGNET_STUB_LENGTH)
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
             self._connect_with_retry(conn, peers)
             conn.handshake(magnet.info_hash, magnet=True)
@@ -191,23 +204,64 @@ class TorrentClient:
         with self._atomic_output(output_path) as output_file:
             output_file.write(data)
 
-    def _download_all_pieces(
+    def _download_with_failover(
             self,
-            conn: PeerConnection,
             meta: TorrentMetadata,
             output_file: BinaryIO,
-            output_path: str
+            output_path: str,
+            peers: list[Peer],
+            info_hash: bytes,
+            *,
+            magnet: bool,
+            initial_conn: PeerConnection | None = None
     ) -> None:
-        """Download every piece, streaming each verified piece straight to disk.
+        """Download every piece, streaming each to disk, failing over on error.
 
-        Pieces are written at their absolute offset rather than accumulated in
-        memory, so peak memory stays O(piece) regardless of total torrent size.
+        Each verified piece is written at its absolute offset (so peak memory
+        stays O(piece)). If a piece fails - peer choke, timeout, reset, or hash
+        mismatch - the connection is dropped and the piece is retried on the next
+        peer in the list, up to ``_PIECE_RETRIES`` times, so a single flaky peer
+        no longer dooms the whole download. ``initial_conn`` is an
+        already-prepared connection (the magnet metadata socket) owned by the
+        caller; replacement connections are owned and closed here.
         """
 
+        rotation = 0 # where in the peer list the next fresh connection starts
+        opened: list[PeerConnection] = []
+
+        def open_ready() -> PeerConnection:
+            nonlocal rotation
+            conn = PeerConnection(self.peer_id, reporter=self._reporter)
+            opened.append(conn)
+            count = len(peers) or 1
+            start = rotation % count
+            ordered = list(peers[start:]) + list(peers[:start])
+            self._connect_with_retry(conn, ordered)
+            conn.handshake(info_hash, magnet=magnet)
+            conn.send_interested()
+            rotation = start + 1
+            return conn
+
+        # Open the connection (for torrent) before announcing progress so the
+        # "connected to ..." line keeps its original position in the output.
+        conn = initial_conn if initial_conn is not None else open_ready()
         self._reporter.report(f"downloading to {output_path} ...")
         self._reporter.report(f"pieces to download: {len(meta.piece_hashes)}")
-        for piece_index in range(len(meta.piece_hashes)):
-            piece = conn.download_piece(meta, piece_index)
-            output_file.seek(piece_index * meta.piece_length)
-            output_file.write(piece)
-            self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
+        try:
+            for piece_index in range(len(meta.piece_hashes)):
+                for attempt in range(1, _PIECE_RETRIES + 1):
+                    try:
+                        piece = conn.download_piece(meta, piece_index)
+                        break
+                    except PeerProtocolError:
+                        if conn is not initial_conn:
+                            conn.close()
+                        if attempt == _PIECE_RETRIES:
+                            raise
+                        conn = open_ready()
+                output_file.seek(piece_index * meta.piece_length)
+                output_file.write(piece)
+                self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
+        finally:
+            for conn in opened:
+                conn.close()
