@@ -12,6 +12,7 @@ import tempfile
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
+from typing import BinaryIO
 
 import bencodepy
 
@@ -72,9 +73,10 @@ class TorrentClient:
         self._atomic_write(output_path, piece)
 
     def download_to_file(self, meta: TorrentMetadata, output_path: str) -> None:
-        with self._ready_connection(meta) as conn:
-            data = self._download_all_pieces(conn, meta, output_path)
-        self._atomic_write(output_path, data)
+        with self._atomic_output(output_path) as output_file:
+            with self._ready_connection(meta) as conn:
+                self._download_all_pieces(conn, meta, output_file, output_path)
+
 
     @contextmanager
     def _ready_connection(self, meta: TorrentMetadata) -> Iterator[PeerConnection]:
@@ -106,11 +108,11 @@ class TorrentClient:
         self._atomic_write(output_path, piece)
 
     def magnet_download_to_file(self, magnet: MagnetLink, output_path: str) -> None:
-        with self._magnet_connection(magnet) as (conn, ext_id):
-            meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
-            conn.send_interested()
-            data = self._download_all_pieces(conn, meta, output_path)
-        self._atomic_write(output_path, data)
+        with self._atomic_output(output_path) as output_file:
+            with self._magnet_connection(magnet) as (conn, ext_id):
+                meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
+                conn.send_interested()
+                self._download_all_pieces(conn, meta, output_file, output_path)
 
     @contextmanager
     def _magnet_connection(self, magnet: MagnetLink) -> Iterator[tuple[PeerConnection, int]]:
@@ -128,13 +130,15 @@ class TorrentClient:
             yield conn, ext_id
 
     @staticmethod
-    def _atomic_write(output_path: str, data: bytes) -> None:
-        """Write ``data`` to ``output_path`` atomically and durably.
+    @contextmanager
+    def _atomic_output(output_path: str) -> Iterator[BinaryIO]:
+        """Yield a writable file that lands at ``output_path`` only on success.
 
         A crash or interrupt mid-write must not leave a half-written file at the
-        final path: write to a temp file in the same directory, flush+fsync, then
-        rename it into place (an atomic operation on the same filesystem). The
-        temp file is removed if anything fails before the rename.
+        final path: callers write to the yielded temp file (in the same
+        directory), and on clean exit it is flushed+fsynced and renamed into
+        place (atomic on the same filesystem). If the body raises, the temp file
+        is removed and the final path is left untouched.
         """
 
         path = Path(output_path)
@@ -142,7 +146,7 @@ class TorrentClient:
 
         try:
             with os.fdopen(fd, "wb") as tmp:
-                tmp.write(data)
+                yield tmp
                 tmp.flush()
                 os.fsync(tmp.fileno())
             os.replace(tmp_name, path)
@@ -153,12 +157,29 @@ class TorrentClient:
                 pass
             raise
 
-    def _download_all_pieces(self, conn: PeerConnection, meta: TorrentMetadata, output_path: str) -> bytes:
+    def _atomic_write(self, output_path: str, data: bytes) -> None:
+        """Atomically write a single in-memory blob (used for single pieces)."""
+
+        with self._atomic_output(output_path) as output_file:
+            output_file.write(data)
+
+    def _download_all_pieces(
+            self,
+            conn: PeerConnection,
+            meta: TorrentMetadata,
+            output_file: BinaryIO,
+            output_path: str
+    ) -> None:
+        """Download every piece, streaming each verified piece straight to disk.
+
+        Pieces are written at their absolute offset rather than accumulated in
+        memory, so peak memory stays O(piece) regardless of total torrent size.
+        """
+
         self._reporter.report(f"downloading to {output_path} ...")
         self._reporter.report(f"pieces to download: {len(meta.piece_hashes)}")
-        pieces = []
         for piece_index in range(len(meta.piece_hashes)):
             piece = conn.download_piece(meta, piece_index)
-            pieces.append(piece)
+            output_file.seek(piece_index * meta.piece_length)
+            output_file.write(piece)
             self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
-        return b"".join(pieces)
