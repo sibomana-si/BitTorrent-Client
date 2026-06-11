@@ -13,7 +13,6 @@ import socket
 from collections.abc import Iterator, Sequence
 
 import bencodepy
-from future.backports.email.mime import message
 
 from src.constants import (
     BLOCK_SIZE,
@@ -108,6 +107,14 @@ class PeerConnection:
         )
         self._socket.sendall(message)
         response = self._recv_exact(_HANDSHAKE_LEN)
+        # confirm the response is the protocol we expect and the info hash received matches the one we sent
+        if response[1:20] != PROTOCOL_NAME:
+            raise PeerProtocolError("Peer sent an unexpected handshake protocol")
+        if response[28:48] != info_hash:
+            raise PeerProtocolError(
+                f"Peer handshake info hash mismatch: "
+                f"{response[28:48].hex()} != {info_hash.hex()}"
+            )
         self.reserved_bytes = response[20:28]
         self.remote_peer_id = response[-20:].hex()
 
