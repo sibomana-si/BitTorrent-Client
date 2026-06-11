@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from urllib.parse import quote_plus, urlencode, urlsplit
 
 import bencodepy
@@ -18,17 +20,52 @@ _PEER_RECORD_LEN = 6 # 4 bytes IPv4 + 2 bytes port
 _HTTP_TIMEOUT = (5, 15) # (connect, read) timeout in seconds
 
 
+def _is_blocked_ip(ip: str) -> bool:
+    """True if ``ip`` is one we must never let a tracker URL point us at.
+
+    Loopback, private, link-local (including the cloud-metadata address
+    ``169.254.169.254``), reserved, multicast, and unspecified addresses are all
+    internal/non-routable targets an SSRF payload would aim for.
+    """
+    address = ipaddress.ip_address(ip)
+    return (
+        address.is_loopback
+        or address.is_private
+        or address.is_link_local
+        or address.is_reserved
+        or address.is_multicast
+        or address.is_unspecified
+    )
+
+
 def _validate_tracker_url(url: str) -> None:
     """Reject tracker URLs that could be used for SSRF.
 
     The announce URL is attacker-controlled (it comes from the .torrent/magnet),
     so only ``http``/``https`` are honoured - ``file://``, ``gopher://`` and the
-    like are refused before any request is made.
+    like are refused before any request is made. The host is then resolved, and
+    every resolved address is checked: a URL that points at an internal,
+    loopback, or cloud-metadata address is refused before we connect.
     """
 
-    scheme = urlsplit(url).scheme.lower()
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
     if scheme not in ALLOWED_SCHEMES:
         raise TrackerError(f"Unsupported tracker URL scheme: {scheme or '(none)'}")
+
+    host = parts.hostname
+    if not host:
+        raise TrackerError(f"Tracker URL has no host: {url}")
+
+    try:
+        resolved = socket.getaddrinfo(host, parts.port, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        raise TrackerError(f"Cannot resolve tracker host {host!r}: {exc}") from exc
+
+    for info in resolved:
+        ip = info[4][0]
+        if _is_blocked_ip(ip):
+            raise TrackerError(f"Tracker host {host!r} resolves to a blocked address: {ip}")
 
 
 def _build_session() -> requests.Session:
