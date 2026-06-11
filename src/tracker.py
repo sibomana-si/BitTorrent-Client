@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import ipaddress
 import socket
-from urllib.parse import quote_plus, urlencode, urlsplit
+from urllib.parse import quote_plus, urlencode, urljoin, urlsplit
 
 import bencodepy
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from src.constants import ALLOWED_SCHEMES, PEER_ID, TRACKER_PORT
+from src.constants import ALLOWED_SCHEMES, MAX_REDIRECTS, PEER_ID, TRACKER_PORT
 from src.errors import TrackerError
 from src.models import Peer
 
@@ -92,6 +92,27 @@ def _build_session() -> requests.Session:
 _SESSION = _build_session()
 
 
+def _get_validated(url: str) -> requests.Response:
+    """GET ``url``, following redirects manually with the SSRF guard on each hop.
+
+    Automatic redirects are disabled: a tracker that passes the guard could
+    otherwise ``302`` us to an internal address. Each ``Location`` is resolved,
+    re-validated by :func:`_validate_tracker_url`, and followed up to
+    ``MAX_REDIRECTS`` times before giving up.
+    """
+
+    for _ in range(MAX_REDIRECTS + 1):
+        response = _SESSION.get(url, timeout=_HTTP_TIMEOUT, allow_redirects=False)
+        if not (response.is_redirect or response.is_permanent_redirect):
+            return response
+        location = response.headers.get("Location")
+        if not location:
+            return response
+        url = urljoin(url, location)
+        _validate_tracker_url(url)
+    raise TrackerError("Too many tracker redirects")
+
+
 class TrackerClient:
     """Announces to a tracker and returns the peers it reports."""
 
@@ -114,7 +135,7 @@ class TrackerClient:
         }
         url = f"{tracker_url}?{urlencode(params, quote_via=quote_plus)}"
         try:
-            response = _SESSION.get(url, timeout=_HTTP_TIMEOUT)
+            response = _get_validated(url)
             response.raise_for_status()
         except requests.RequestException as exc:
             raise TrackerError(f"Tracker request failed: {exc}") from exc

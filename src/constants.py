@@ -37,6 +37,10 @@ MAGNET_STUB_LENGTH = 999
 # are honoured (blocks file://, gopher://, ftp:// and similar SSRF vectors).
 ALLOWED_SCHEMES = ("http", "https")
 
+# How many tracker redirects to follow before giving up. Each hop is re-checked
+# against the SSRF guard, so this only bounds a redirect loop / chain.
+MAX_REDIRECTS = 5
+
 # Peer wire message ids used by this client.
 MSG_CHOKE = 0
 MSG_UNCHOKE = 1
