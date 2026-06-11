@@ -8,7 +8,9 @@ formatting; the protocol details live in :mod:`src.peer` and :mod:`src.tracker`.
 from __future__ import annotations
 
 import os
+import random
 import tempfile
+import time
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
@@ -16,7 +18,12 @@ from typing import BinaryIO
 
 import bencodepy
 
-from src.constants import MAGNET_STUB_LENGTH, PEER_ID
+from src.constants import (
+    CONNECT_RETRIES,
+    MAGNET_STUB_LENGTH,
+    PEER_ID,
+    RETRY_BASE_DELAY
+)
 from src.errors import BencodeError, PeerProtocolError
 from src.magnet import parse_magnet_link
 from src.models import MagnetLink, Peer, TorrentMetadata
@@ -61,7 +68,7 @@ class TorrentClient:
 
         peers = [peer] if peer is not None else self.get_peers(meta)
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
-            conn.connect(peers)
+            self._connect_with_retry(conn, peers)
             conn.handshake(meta.info_hash)
             if conn.remote_peer_id is None:
                 raise PeerProtocolError("Handshake did not yield a peer id")
@@ -82,7 +89,7 @@ class TorrentClient:
     def _ready_connection(self, meta: TorrentMetadata) -> Iterator[PeerConnection]:
         """A connection that has handshaked, read the bitfield, and unchocked."""
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
-            conn.connect(self.get_peers(meta))
+            self._connect_with_retry(conn, self.get_peers(meta))
             conn.handshake(meta.info_hash)
             conn.send_interested()
             yield conn
@@ -124,10 +131,31 @@ class TorrentClient:
 
         peers = self.tracker.get_peers(magnet.tracker_url, magnet.info_hash, MAGNET_STUB_LENGTH)
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
-            conn.connect(peers)
+            self._connect_with_retry(conn, peers)
             conn.handshake(magnet.info_hash, magnet=True)
             ext_id = conn.extension_handshake()
             yield conn, ext_id
+
+    def _connect_with_retry(self, conn: PeerConnection, peers) -> None:
+        """Connect ``conn`` to the peer set, retrying transient failures.
+
+        ``PeerConnection.connect`` already tries each peer once; this wraps the
+        whole attempt in a bounded exponential backoff (with jitter) so a
+        momentary network blip or a peer set that is briefly all-unreachable is
+        retried rather than failing the command outright. The happy path
+        connects on the first try with no delay.
+        """
+
+        delay = RETRY_BASE_DELAY
+        for attempt in range(1, CONNECT_RETRIES + 1):
+            try:
+                conn.connect(peers)
+                return
+            except PeerProtocolError:
+                if attempt == CONNECT_RETRIES:
+                    raise
+                time.sleep(delay + random.uniform(0, delay))
+                delay *= 2
 
     @staticmethod
     @contextmanager

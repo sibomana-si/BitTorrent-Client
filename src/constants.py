@@ -17,6 +17,10 @@ BLOCK_SIZE = 2**14
 CONNECT_TIMEOUT = 5 # establishing the TCP connection
 RECV_TIMEOUT = 30 # waiting for a single message from a connected peer
 
+# Bounded retry with exponential backoff for transient connection failures.
+CONNECT_RETRIES = 3  # total attempts to reach the peer set before giving up
+RETRY_BASE_DELAY = 0.5  # seconds; doubled (plus jitter) between attempts
+
 # How many block requests to keep in flight at once (pipelining depth).
 PIPELINE_DEPTH = 4
 
