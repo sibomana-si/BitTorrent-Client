@@ -31,6 +31,9 @@ def main(argv: list[str] | None = None) -> None:
     except BitTorrentError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        raise SystemExit(130)
 
 
 def _decode(args: argparse.Namespace, client: TorrentClient) -> None:
