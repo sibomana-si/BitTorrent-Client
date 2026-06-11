@@ -13,6 +13,10 @@ TRACKER_PORT = 6881
 # Peers serve pieces in blocks of at most 16 KiB.
 BLOCK_SIZE = 2**14
 
+# Upper bound on the metadata blob (BEP 9) a peer may claim to send, so a hostile
+# peer cannot drive a huge allocation via the advertised ``total_size``.
+MAX_METADATA_BYTES = 2**20
+
 # Socket deadlines (seconds): a peer that stalls must not hang the client.
 CONNECT_TIMEOUT = 5 # establishing the TCP connection
 RECV_TIMEOUT = 30 # waiting for a single message from a connected peer

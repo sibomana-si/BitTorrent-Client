@@ -13,11 +13,13 @@ import socket
 from collections.abc import Iterator, Sequence
 
 import bencodepy
+from sympy.utilities._compilation import availability
 
 from src.constants import (
     BLOCK_SIZE,
     CONNECT_TIMEOUT,
     MAGNET_RESERVED,
+    MAX_METADATA_BYTES,
     MSG_CHOKE,
     MSG_EXTENSION,
     MSG_INTERESTED,
@@ -195,7 +197,13 @@ class PeerConnection:
 
         response = self._recv_until(MSG_EXTENSION)
         header = _decode_leading(response[6:])
-        total_size = header[b"total_size"]
+        total_size = header.get(b"total_size")
+        # total_size is peer-supplied: reject anything that isn't a sane positive
+        # length bounded by both our cap and the bytes actually received, so a
+        # negative/huge/missing value can't yield a garbage slice or OOM.
+        available = len(response) - 6
+        if (not isinstance(total_size, int) or not 0 < total_size <= available or total_size > MAX_METADATA_BYTES):
+            raise PeerProtocolError(f"Peer advertised an invalid metadata size: {total_size!r}")
         return response[-total_size:]
 
     def _send_extension(self, extension_id: int, payload: bytes) -> None:
