@@ -2,20 +2,33 @@
 
 from __future__ import annotations
 
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus, urlencode, urlsplit
 
 import bencodepy
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from src.constants import PEER_ID, TRACKER_PORT
+from src.constants import ALLOWED_SCHEMES, PEER_ID, TRACKER_PORT
 from src.errors import TrackerError
 from src.models import Peer
 
 
 _PEER_RECORD_LEN = 6 # 4 bytes IPv4 + 2 bytes port
 _HTTP_TIMEOUT = (5, 15) # (connect, read) timeout in seconds
+
+
+def _validate_tracker_url(url: str) -> None:
+    """Reject tracker URLs that could be used for SSRF.
+
+    The announce URL is attacker-controlled (it comes from the .torrent/magnet),
+    so only ``http``/``https`` are honoured - ``file://``, ``gopher://`` and the
+    like are refused before any request is made.
+    """
+
+    scheme = urlsplit(url).scheme.lower()
+    if scheme not in ALLOWED_SCHEMES:
+        raise TrackerError(f"Unsupported tracker URL scheme: {scheme or '(none)'}")
 
 
 def _build_session() -> requests.Session:
@@ -52,6 +65,7 @@ class TrackerClient:
     def get_peers(self, tracker_url: str, info_hash: bytes, left: int) -> list[Peer]:
         """Request peers for ``info_hash`` from ``tracker_url`` (compact mode)."""
 
+        _validate_tracker_url(tracker_url)
         params = {
             "info_hash": info_hash,
             "peer_id": self.peer_id,

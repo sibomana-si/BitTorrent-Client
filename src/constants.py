@@ -33,6 +33,10 @@ MAGNET_RESERVED = (1 << 20).to_bytes(8, "big")
 # Placeholder "left" value sent to the tracker before metadata is known.
 MAGNET_STUB_LENGTH = 999
 
+# Tracker URLs come from an untrusted .torrent/magnet, so only plain web schemes
+# are honoured (blocks file://, gopher://, ftp:// and similar SSRF vectors).
+ALLOWED_SCHEMES = ("http", "https")
+
 # Peer wire message ids used by this client.
 MSG_CHOKE = 0
 MSG_UNCHOKE = 1
