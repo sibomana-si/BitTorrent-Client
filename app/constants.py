@@ -22,6 +22,10 @@ MAX_METADATA_BYTES = 2**20
 # drive a huge per-piece allocation.
 MAX_PIECE_LENGTH = 2**27 # 128 MiB
 
+# Ceiling on a whole download. A crafted torrent/magnet cannot request a write
+# larger than this, so it cannot be used to exhaust the disk.
+MAX_TORRENT_LENGTH = 2**33 # 8 GiB
+
 # Socket deadlines (seconds): a peer that stalls must not hang the client.
 CONNECT_TIMEOUT = 5 # establishing the TCP connection
 RECV_TIMEOUT = 30 # waiting for a single message from a connected peer

@@ -21,10 +21,11 @@ import bencodepy
 from app.constants import (
     CONNECT_RETRIES,
     MAGNET_STUB_LENGTH,
+    MAX_TORRENT_LENGTH,
     PEER_ID,
     RETRY_BASE_DELAY
 )
-from app.errors import BencodeError, PeerProtocolError
+from app.errors import BencodeError, InvalidTorrentError, PeerProtocolError
 from app.magnet import parse_magnet_link
 from app.models import MagnetLink, Peer, TorrentMetadata
 from app.peer import PeerConnection
@@ -83,6 +84,7 @@ class TorrentClient:
         self._atomic_write(output_path, piece)
 
     def download_to_file(self, meta: TorrentMetadata, output_path: str) -> None:
+        self._enforce_size_ceiling(meta.length)
         peers = self.get_peers(meta)
         with self._atomic_output(output_path) as output_file:
             self._download_with_failover(meta, output_file, output_path, peers, meta.info_hash, magnet=False)
@@ -121,6 +123,7 @@ class TorrentClient:
         with self._atomic_output(output_path) as output_file:
             with self._magnet_connection(magnet, peers) as (conn, ext_id):
                 meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
+                self._enforce_size_ceiling(meta.length)
                 conn.send_interested()
                 self._download_with_failover(
                     meta,
@@ -148,6 +151,16 @@ class TorrentClient:
             conn.handshake(magnet.info_hash, magnet=True)
             ext_id = conn.extension_handshake()
             yield conn, ext_id
+
+    @staticmethod
+    def _enforce_size_ceiling(length: int) -> None:
+        """Refuse a download whose declared size exceeds the safety ceiling.
+
+        The length comes from an untrusted torrent/magnet; a crafted one must not
+        be able to request a disk-filling write.
+        """
+        if length > MAX_TORRENT_LENGTH:
+            raise InvalidTorrentError(f"Refusing to download {length} bytes (over the {MAX_TORRENT_LENGTH}-byte limit)")
 
     def _connect_with_retry(self, conn: PeerConnection, peers) -> None:
         """Connect ``conn`` to the peer set, retrying transient failures.

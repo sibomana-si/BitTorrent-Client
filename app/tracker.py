@@ -92,6 +92,7 @@ def _build_session() -> requests.Session:
     session = requests.Session()
     session.mount("http://", adapter)
     session.mount("https://", adapter)
+    session.verify = True
     return session
 
 # One shared session: reuses the TCP connection across announces in a download.
