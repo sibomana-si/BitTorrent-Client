@@ -171,6 +171,11 @@ class TrackerClient:
 
     @staticmethod
     def _parse_peers(blob: bytes) -> list[Peer]:
+        # The compact list is a sequence of 6-byte records;
+        # reject any length that isn't a non-zero multiple of 6.
+        if not isinstance(blob, bytes) or not blob or len(blob) % _PEER_RECORD_LEN:
+            raise TrackerError("Tracker returned a malformed peer list")
+
         peers = []
         for offset in range(0, len(blob), _PEER_RECORD_LEN):
             record = blob[offset : offset + _PEER_RECORD_LEN]
