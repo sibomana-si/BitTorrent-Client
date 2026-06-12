@@ -11,7 +11,13 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from app.constants import ALLOWED_SCHEMES, MAX_REDIRECTS, PEER_ID, TRACKER_PORT
+from app.constants import (
+    ALLOWED_SCHEMES,
+    MAX_REDIRECTS,
+    MAX_TRACKER_RESPONSE_BYTES,
+    PEER_ID,
+    TRACKER_PORT
+)
 from app.errors import TrackerError
 from app.models import Peer
 
@@ -102,15 +108,29 @@ def _get_validated(url: str) -> requests.Response:
     """
 
     for _ in range(MAX_REDIRECTS + 1):
-        response = _SESSION.get(url, timeout=_HTTP_TIMEOUT, allow_redirects=False)
+        response = _SESSION.get(url, timeout=_HTTP_TIMEOUT, allow_redirects=False, stream=True)
         if not (response.is_redirect or response.is_permanent_redirect):
             return response
         location = response.headers.get("Location")
+        response.close()
         if not location:
             return response
         url = urljoin(url, location)
         _validate_tracker_url(url)
     raise TrackerError("Too many tracker redirects")
+
+
+def _read_capped(response: requests.Response) -> bytes:
+    """Read the response body, refusing to buffer more than the size limit."""
+    chunks: list[bytes] = []
+    total = 0
+    for chunk in response.iter_content(8192):
+        total += len(chunk)
+        if total > MAX_TRACKER_RESPONSE_BYTES:
+            response.close()
+            raise TrackerError("Tracker response exceeded the size limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class TrackerClient:
@@ -137,11 +157,12 @@ class TrackerClient:
         try:
             response = _get_validated(url)
             response.raise_for_status()
+            body = _read_capped(response)
         except requests.RequestException as exc:
             raise TrackerError(f"Tracker request failed: {exc}") from exc
 
         try:
-            decoded = bencodepy.decode(response.content)
+            decoded = bencodepy.decode(body)
             peers = decoded[b"peers"]
         except (bencodepy.BencodeDecodeError, KeyError, TypeError) as exc:
             raise TrackerError(f"Unexpected tracker response: {exc}") from exc

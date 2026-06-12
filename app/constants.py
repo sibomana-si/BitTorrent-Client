@@ -50,6 +50,10 @@ ALLOWED_SCHEMES = ("http", "https")
 # against the SSRF guard, so this only bounds a redirect loop / chain.
 MAX_REDIRECTS = 5
 
+# Upper bound on a tracker response body. Compact peer lists are tiny, so this is
+# generous; it stops a hostile tracker from streaming unbounded data into memory.
+MAX_TRACKER_RESPONSE_BYTES = 2**18 # 256 KiB
+
 # Peer wire message ids used by this client.
 MSG_CHOKE = 0
 MSG_UNCHOKE = 1
