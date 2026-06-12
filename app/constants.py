@@ -4,6 +4,15 @@ Keeping these in one place avoids magic numbers scattered through the socket
 and tracker code, and documents the few values the BitTorrent spec fixes.
 """
 
+import logging
+
+# Default level for the stderr diagnostic logger. Set above CRITICAL - fully
+# silent - rather than the conventional WARNING, because the
+# contract requires byte-identical stdout AND stderr when no verbosity option is
+# given, including on error paths (where the CLI boundary logs at ERROR).
+# Diagnostics are opted into with -v / -vv / --log-level.
+DEFAULT_LOG_LEVEL = logging.CRITICAL + 10
+
 # Identifier this client announces to trackers and peers (must be 20 bytes).
 PEER_ID = b"00112233445566998877"
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import socket
 from urllib.parse import quote_plus, urlencode, urljoin, urlsplit
 
@@ -24,6 +25,8 @@ from app.models import Peer
 
 _PEER_RECORD_LEN = 6 # 4 bytes IPv4 + 2 bytes port
 _HTTP_TIMEOUT = (5, 15) # (connect, read) timeout in seconds
+
+logger = logging.getLogger(__name__)
 
 
 def _is_blocked_ip(ip: str) -> bool:

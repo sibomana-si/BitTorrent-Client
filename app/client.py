@@ -7,6 +7,7 @@ formatting; the protocol details live in :mod:`app.peer` and :mod:`app.tracker`.
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 import tempfile
@@ -35,6 +36,8 @@ from app.tracker import TrackerClient
 
 # How many peers to try for a single piece before giving the whole piece up.
 _PIECE_RETRIES = 3
+
+logger = logging.getLogger(__name__)
 
 
 class TorrentClient:

@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 
 from app.client import TorrentClient
+from app.constants import DEFAULT_LOG_LEVEL
 from app.errors import BitTorrentError
 from app.models import Peer, TorrentMetadata
+
+
+logger = logging.getLogger(__name__)
 
 
 class StdoutReporter:
@@ -23,8 +28,30 @@ class StdoutReporter:
         print(message)
 
 
+def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
+    """Attach the stderr diagnostics handler to the ``app`` logger hierarchy.
+
+    Configuration belongs to the entry point: modules only emit through
+    ``logging.getLogger(__name__)``. The handler goes on the ``app`` root with
+    propagation off, so records never reach the global root (or its lastResort
+    handler). Re-invocation replaces the previous handler, so repeated
+    in-process ``main()`` calls never stack handlers or hold a stale stream.
+    """
+
+    app_logger = logging.getLogger("app")
+    app_logger.propagate = False
+    for handler in list(app_logger.handlers):
+        if not isinstance(handler, logging.NullHandler):
+            app_logger.removeHandler(handler)
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    app_logger.addHandler(handler)
+    app_logger.setLevel(level)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
+    _configure_logging()
     client = TorrentClient(reporter=StdoutReporter())
     try:
         args.handler(args, client)

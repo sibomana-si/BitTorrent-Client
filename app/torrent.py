@@ -10,6 +10,7 @@ Two sources produce the same entity:
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 
 import bencodepy
@@ -20,6 +21,8 @@ from app.models import TorrentMetadata
 
 
 _PIECE_HASH_LEN = 20
+
+logger = logging.getLogger(__name__)
 
 
 def load_torrent_file(path: str) -> TorrentMetadata:
@@ -76,6 +79,18 @@ def _build(tracker_url: str, info: dict, info_hash: bytes) -> TorrentMetadata:
         raise InvalidTorrentError("Piece count is inconsistent with the torrent length")
 
     piece_hashes = [ pieces[i : i + _PIECE_HASH_LEN] for i in range(0, len(pieces), _PIECE_HASH_LEN) ]
+    logger.debug(
+        "metadata built",
+        extra={
+            "ctx": {
+                "info_hash": info_hash.hex()[:8],
+                "length": length,
+                "pieces": len(piece_hashes),
+                "piece_length": piece_length
+            }
+        }
+    )
+
     return TorrentMetadata(
         tracker_url=tracker_url,
         length=length,

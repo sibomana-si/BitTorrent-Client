@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from urllib.parse import parse_qs, urlparse
 
 from app.errors import InvalidMagnetError
@@ -10,6 +11,8 @@ from app.models import MagnetLink
 
 _BTIH_PREFIX = "urn:btih:"
 _INFO_HASH_HEX_LEN = 40
+
+logger = logging.getLogger(__name__)
 
 
 def parse_magnet_link(uri: str) -> MagnetLink:
@@ -44,4 +47,5 @@ def parse_magnet_link(uri: str) -> MagnetLink:
     except ValueError as exc:
         raise InvalidMagnetError(f"Invalid info hash in magnet link: {uri}") from exc
 
+    logger.debug("magnet link parsed", extra={"ctx": {"info_hash": info_hash.hex()[:8], "tracker": tr_values[0]}})
     return MagnetLink(info_hash=info_hash, tracker_url=tr_values[0])

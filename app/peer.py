@@ -9,11 +9,11 @@ code did not guarantee.
 from __future__ import annotations
 
 import hashlib
+import logging
 import socket
 from collections.abc import Iterator, Sequence
 
 import bencodepy
-from sympy.utilities._compilation import availability
 
 from app.constants import (
     BLOCK_SIZE,
@@ -44,6 +44,8 @@ _PIECE_HEADER_LEN = 13
 
 # Upper bound on a single message body.
 _MAX_MESSAGE_LEN = 2**20
+
+logger = logging.getLogger(__name__)
 
 
 class PeerConnection:
