@@ -10,15 +10,18 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 
 from app.client import TorrentClient
-from app.constants import DEFAULT_LOG_LEVEL
+from app.constants import DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV_VAR
 from app.errors import BitTorrentError
 from app.models import Peer, TorrentMetadata
 
 
 logger = logging.getLogger(__name__)
+
+_LOG_LEVEL_CHOICES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
 class StdoutReporter:
@@ -26,6 +29,51 @@ class StdoutReporter:
 
     def report(self, message: str) -> None:
         print(message)
+
+
+def _logging_options() -> argparse.ArgumentParser:
+    """The global logging flags, shared by the top-level parser and every
+    subcommand (so ``-v`` works before and after the subcommand name).
+
+    Every default is SUPPRESS: argparse subparsers parse into a fresh namespace
+    and copy it back, so a real default here would clobber a flag given before
+    the subcommand. Absent flags simply leave the attribute unset, which
+    :func:`_resolve_log_level` reads with ``getattr`` fallbacks.
+    """
+
+    options = argparse.ArgumentParser(add_help=False)
+    options.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=argparse.SUPPRESS,
+        help="diagnostics on stderr: -v for INFO, -vv for DEBUG",
+    )
+    options.add_argument(
+        "--log-level",
+        choices=_LOG_LEVEL_CHOICES,
+        default=argparse.SUPPRESS,
+        help="explicit diagnostic level (overrides -v)"
+    )
+
+    return options
+
+
+def _resolve_log_level(args: argparse.Namespace) -> int:
+    """Flag beats env beats the silent default."""
+
+    explicit = getattr(args, "log_level", None)
+    if explicit is not None:
+        return getattr(logging, explicit)
+    verbose = getattr(args, "verbose", 0)
+    if verbose >= 2:
+        return logging.DEBUG
+    if verbose == 1:
+        return logging.INFO
+    env_level = os.environ.get(LOG_LEVEL_ENV_VAR, "").upper()
+    if env_level in _LOG_LEVEL_CHOICES:
+        return getattr(logging, env_level)
+    return DEFAULT_LOG_LEVEL
 
 
 def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
@@ -51,7 +99,7 @@ def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
-    _configure_logging()
+    _configure_logging(_resolve_log_level(args))
     client = TorrentClient(reporter=StdoutReporter())
     try:
         args.handler(args, client)
@@ -141,11 +189,12 @@ def _print_metadata(meta: TorrentMetadata) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="app.main")
+    logging_options = _logging_options()
+    parser = argparse.ArgumentParser(prog="app.main", parents=[logging_options])
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     def add(name: str, handler) -> argparse.ArgumentParser:
-        sub = subcommands.add_parser(name)
+        sub = subcommands.add_parser(name, parents=[logging_options])
         sub.set_defaults(handler=handler)
         return sub
 

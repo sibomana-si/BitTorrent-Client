@@ -13,6 +13,10 @@ import logging
 # Diagnostics are opted into with -v / -vv / --log-level.
 DEFAULT_LOG_LEVEL = logging.CRITICAL + 10
 
+# Environment fallback for the diagnostics level: consulted
+# only when no -v / --log-level flag is given on the command line.
+LOG_LEVEL_ENV_VAR = "BITTORRENT_LOG_LEVEL"
+
 # Identifier this client announces to trackers and peers (must be 20 bytes).
 PEER_ID = b"00112233445566998877"
 
