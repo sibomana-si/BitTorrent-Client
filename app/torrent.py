@@ -14,8 +14,9 @@ from pathlib import Path
 
 import bencodepy
 
-from src.errors import InvalidTorrentError, PeerProtocolError
-from src.models import TorrentMetadata
+from app.constants import MAX_PIECE_LENGTH
+from app.errors import InvalidTorrentError, PeerProtocolError
+from app.models import TorrentMetadata
 
 
 _PIECE_HASH_LEN = 20
@@ -60,12 +61,25 @@ def metadata_from_raw_info(tracker_url: str, raw_info: bytes, expected_hash: byt
 
 
 def _build(tracker_url: str, info: dict, info_hash: bytes) -> TorrentMetadata:
+    length = info[b"length"]
+    piece_length = info[b"piece length"]
     pieces = info[b"pieces"]
+
+    if not isinstance(length, int) or length <= 0:
+        raise InvalidTorrentError(f"Invalid torrent length: {length!r}")
+    if not isinstance(piece_length, int) or not 0 < piece_length <= MAX_PIECE_LENGTH:
+        raise InvalidTorrentError(f"Invalid piece length: {piece_length!r}")
+    if not isinstance(pieces, bytes) or len(pieces) % _PIECE_HASH_LEN != 0:
+        raise InvalidTorrentError("Piece hashes are missing or misaligned")
+    expected_count = -(-length // piece_length)
+    if len(pieces) // _PIECE_HASH_LEN != expected_count:
+        raise InvalidTorrentError("Piece count is inconsistent with the torrent length")
+
     piece_hashes = [ pieces[i : i + _PIECE_HASH_LEN] for i in range(0, len(pieces), _PIECE_HASH_LEN) ]
     return TorrentMetadata(
         tracker_url=tracker_url,
-        length=info[b"length"],
+        length=length,
         info_hash=info_hash,
-        piece_length=info[b"piece length"],
+        piece_length=piece_length,
         piece_hashes=piece_hashes
     )

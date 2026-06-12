@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from urllib.parse import unquote_plus
 
-from src.errors import InvalidMagnetError
-from src.models import MagnetLink
+from app.errors import InvalidMagnetError
+from app.models import MagnetLink
 
 
 _XT_PREFIX = "xt=urn:btih:"

@@ -15,7 +15,7 @@ from collections.abc import Iterator, Sequence
 import bencodepy
 from sympy.utilities._compilation import availability
 
-from src.constants import (
+from app.constants import (
     BLOCK_SIZE,
     CONNECT_TIMEOUT,
     MAGNET_RESERVED,
@@ -31,9 +31,9 @@ from src.constants import (
     PROTOCOL_NAME,
     RECV_TIMEOUT
 )
-from src.errors import PeerProtocolError
-from src.models import Peer, TorrentMetadata
-from src.reporting import NullReporter, ProgressReporter
+from app.errors import PeerProtocolError
+from app.models import Peer, TorrentMetadata
+from app.reporting import NullReporter, ProgressReporter
 
 
 _HANDSHAKE_LEN = 68

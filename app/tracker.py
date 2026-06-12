@@ -11,9 +11,9 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from src.constants import ALLOWED_SCHEMES, MAX_REDIRECTS, PEER_ID, TRACKER_PORT
-from src.errors import TrackerError
-from src.models import Peer
+from app.constants import ALLOWED_SCHEMES, MAX_REDIRECTS, PEER_ID, TRACKER_PORT
+from app.errors import TrackerError
+from app.models import Peer
 
 
 _PEER_RECORD_LEN = 6 # 4 bytes IPv4 + 2 bytes port

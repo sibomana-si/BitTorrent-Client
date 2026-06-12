@@ -11,9 +11,9 @@ import argparse
 import json
 import sys
 
-from src.client import TorrentClient
-from src.errors import BitTorrentError
-from src.models import Peer, TorrentMetadata
+from app.client import TorrentClient
+from app.errors import BitTorrentError
+from app.models import Peer, TorrentMetadata
 
 
 class StdoutReporter:

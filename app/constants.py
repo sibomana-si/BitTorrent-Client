@@ -17,6 +17,11 @@ BLOCK_SIZE = 2**14
 # peer cannot drive a huge allocation via the advertised ``total_size``.
 MAX_METADATA_BYTES = 2**20
 
+# Upper bound on a torrent's declared piece length. Real torrents top out around
+# a few tens of MiB; a larger value in untrusted metadata is rejected so it can't
+# drive a huge per-piece allocation.
+MAX_PIECE_LENGTH = 2**27 # 128 MiB
+
 # Socket deadlines (seconds): a peer that stalls must not hang the client.
 CONNECT_TIMEOUT = 5 # establishing the TCP connection
 RECV_TIMEOUT = 30 # waiting for a single message from a connected peer

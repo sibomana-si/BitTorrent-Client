@@ -2,7 +2,7 @@
 
 This layer wires the infrastructure together for each high-level action and
 owns the connection lifecycle. The CLI calls these methods and handles all
-formatting; the protocol details live in :mod:`src.peer` and :mod:`src.tracker`.
+formatting; the protocol details live in :mod:`app.peer` and :mod:`app.tracker`.
 """
 
 from __future__ import annotations
@@ -18,19 +18,19 @@ from typing import BinaryIO
 
 import bencodepy
 
-from src.constants import (
+from app.constants import (
     CONNECT_RETRIES,
     MAGNET_STUB_LENGTH,
     PEER_ID,
     RETRY_BASE_DELAY
 )
-from src.errors import BencodeError, PeerProtocolError
-from src.magnet import parse_magnet_link
-from src.models import MagnetLink, Peer, TorrentMetadata
-from src.peer import PeerConnection
-from src.reporting import NullReporter, ProgressReporter
-from src.torrent import load_torrent_file, metadata_from_raw_info
-from src.tracker import TrackerClient
+from app.errors import BencodeError, PeerProtocolError
+from app.magnet import parse_magnet_link
+from app.models import MagnetLink, Peer, TorrentMetadata
+from app.peer import PeerConnection
+from app.reporting import NullReporter, ProgressReporter
+from app.torrent import load_torrent_file, metadata_from_raw_info
+from app.tracker import TrackerClient
 
 # How many peers to try for a single piece before giving the whole piece up.
 _PIECE_RETRIES = 3
