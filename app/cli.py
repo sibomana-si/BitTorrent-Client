@@ -17,6 +17,7 @@ from app.client import TorrentClient
 from app.constants import DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV_VAR
 from app.errors import BitTorrentError
 from app.models import Peer, TorrentMetadata
+from app.reporting import CompositeReporter, LoggingReporter
 
 
 logger = logging.getLogger(__name__)
@@ -143,7 +144,8 @@ def _configure_logging(level: int = DEFAULT_LOG_LEVEL, log_format: str = "text")
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     _configure_logging(_resolve_log_level(args), getattr(args, "log_format", "text"))
-    client = TorrentClient(reporter=StdoutReporter())
+    reporter = CompositeReporter(StdoutReporter(), LoggingReporter())
+    client = TorrentClient(reporter=reporter)
     try:
         args.handler(args, client)
     except BitTorrentError as exc:

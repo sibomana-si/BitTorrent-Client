@@ -8,6 +8,7 @@ interface layer supplies the concrete sink (``StdoutReporter`` in
 
 from __future__ import annotations
 
+import logging
 from typing import Protocol
 
 
@@ -22,3 +23,31 @@ class NullReporter:
 
     def report(self, message: str) -> None:
         pass
+
+
+class LoggingReporter:
+    """Mirrors progress messages to the logging channel.
+
+    A parallel sink for the same progress events the CLI prints: library
+    callers (or a composed CLI) get them on the default-silent stderr logger
+    instead of - never instead *and* - touching stdout.
+    """
+
+    def __init__(self, logger: logging.Logger | None = None, level: int = logging.DEBUG) -> None:
+        self._logger = logger or logging.getLogger("app.progress")
+        self._level = level
+
+    def report(self, message: str) -> None:
+        self._logger.log(self._level, message)
+
+
+class CompositeReporter:
+    """Fans one report out to several sinks, in order."""
+
+    def __init__(self, *reporters: ProgressReporter) -> None:
+        self._reporters = reporters
+
+    def report(self, message: str) -> None:
+        for reporter in self._reporters:
+            reporter.report(message)
+
