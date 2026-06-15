@@ -268,6 +268,7 @@ class TorrentClient:
         conn = initial_conn if initial_conn is not None else open_ready()
         self._reporter.report(f"downloading to {output_path} ...")
         self._reporter.report(f"pieces to download: {len(meta.piece_hashes)}")
+        started = time.perf_counter()
         try:
             for piece_index in range(len(meta.piece_hashes)):
                 for attempt in range(1, _PIECE_RETRIES + 1):
@@ -300,6 +301,23 @@ class TorrentClient:
                 output_file.write(piece)
                 stats["bytes"] += len(piece)
                 self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
+
+            elapsed = time.perf_counter() - started
+            logger.info(
+                "download complete",
+                extra={
+                    "ctx": {
+                        "info_hash": info_hash.hex()[:8],
+                        "bytes": stats["bytes"],
+                        "pieces": len(meta.piece_hashes),
+                        "elapsed_ms": round(elapsed * 1000, 1),
+                        "throughput_bps": round(stats["bytes"] / elapsed) if elapsed else 0,
+                        "piece_failures": stats["piece_failures"],
+                        "failovers": stats["failovers"],
+                        "connections": len(opened) + (1 if initial_conn else 0)
+                    }
+                }
+            )
         finally:
             for conn in opened:
                 conn.close()
