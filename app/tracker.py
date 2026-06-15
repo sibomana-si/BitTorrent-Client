@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
+import time
 from urllib.parse import quote_plus, urlencode, urljoin, urlsplit
 
 import bencodepy
@@ -158,6 +159,7 @@ class TrackerClient:
             "compact": 1,
         }
         url = f"{tracker_url}?{urlencode(params, quote_via=quote_plus)}"
+        started = time.perf_counter()
         try:
             response = _get_validated(url)
             response.raise_for_status()
@@ -171,7 +173,21 @@ class TrackerClient:
         except (bencodepy.BencodeDecodeError, KeyError, TypeError) as exc:
             raise TrackerError(f"Unexpected tracker response: {exc}") from exc
 
-        return self._parse_peers(peers)
+        parsed = self._parse_peers(peers)
+        logger.debug(
+            "tracker announce ok",
+            extra={
+                "ctx": {
+                    "tracker": urlsplit(tracker_url).hostname,
+                    "info_hash": info_hash.hex()[:8],
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+                    "peers": len(parsed),
+                    "left": left
+                }
+            }
+        )
+        return parsed
+
 
     @staticmethod
     def _parse_peers(blob: bytes) -> list[Peer]:

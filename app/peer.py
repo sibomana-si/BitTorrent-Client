@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import socket
+import time
 from collections.abc import Iterator, Sequence
 
 import bencodepy
@@ -81,6 +82,7 @@ class PeerConnection:
 
         last_error: Exception | None = None
         for peer in peers:
+            started = time.perf_counter()
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(CONNECT_TIMEOUT)
             try:
@@ -92,6 +94,15 @@ class PeerConnection:
             # Switch to the longer per-message deadline for the live connection.
             sock.settimeout(RECV_TIMEOUT)
             self._sock = sock
+            logger.debug(
+                "peer connected",
+                extra={
+                    "ctx": {
+                        "peer": str(peer),
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)
+                    }
+                }
+            )
             self._reporter.report(f"connected to {peer.ip}:{peer.port}")
             return
 
@@ -101,6 +112,7 @@ class PeerConnection:
     def handshake(self, info_hash: bytes, *, magnet: bool = False) -> None:
         """Send the BitTorrent handshake and record the peer's response."""
 
+        started = time.perf_counter()
         reserved = MAGNET_RESERVED if magnet else bytes(8)
         message = (
             len(PROTOCOL_NAME).to_bytes(1, "big")
@@ -121,6 +133,17 @@ class PeerConnection:
             )
         self.reserved_bytes = response[20:28]
         self.remote_peer_id = response[-20:].hex()
+        logger.debug(
+            "handshake ok",
+            extra={
+                "ctx": {
+                    "info_hash": info_hash.hex()[:8],
+                    "peer_id": self.remote_peer_id[:16],
+                    "magnet": magnet,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)
+                }
+            }
+        )
 
     def recv_message(self) -> bytes:
         """Receive one length-prefixed message (header included)."""
@@ -181,6 +204,7 @@ class PeerConnection:
         if not any(self.reserved_bytes):
             raise PeerProtocolError("Peer does not support the metadata extension")
 
+        started = time.perf_counter()
         payload = bencodepy.encode({"m": {"ut_metadata": 1}})
         self._send_extension(extension_id=0, payload=payload)
 
@@ -189,6 +213,15 @@ class PeerConnection:
         if b"m" not in handshake or b"ut_metadata" not in handshake[b"m"]:
             raise PeerProtocolError(f"Invalid extension handshake response: {handshake}")
         self.metadata_extension_id = handshake[b"m"][b"ut_metadata"]
+        logger.debug(
+            "extension handshake ok",
+            extra={
+                "ctx": {
+                    "ut_metadata": self.metadata_extension_id,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)
+                }
+            }
+        )
         return self.metadata_extension_id
 
     def fetch_metadata(self, extension_id: int) -> bytes:
@@ -221,6 +254,7 @@ class PeerConnection:
         """Download one piece, verify its SHA-1, and return its bytes."""
 
         self._reporter.report(f"downloading piece_index: {piece_index} ...")
+        started = time.perf_counter()
         blocks = self._block_requests(meta, piece_index)
 
         # Key returned blocks by their offset so out-of-order responses are
@@ -252,6 +286,17 @@ class PeerConnection:
         actual = hashlib.sha1(piece).hexdigest()
         if actual != expected:
             raise PeerProtocolError(f"Invalid piece hash: {actual} | {expected}")
+        logger.debug(
+            "piece downloaded",
+            extra={
+                "ctx": {
+                    "piece_index": piece_index,
+                    "blocks": len(blocks),
+                    "bytes": len(piece),
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 1)
+                }
+            }
+        )
         self._reporter.report(f"valid piece hash: {actual} | {expected}")
         return piece
 
