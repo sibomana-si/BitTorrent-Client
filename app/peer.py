@@ -284,8 +284,7 @@ class PeerConnection:
         wanted = {begin: length for _index, begin, length in blocks}
         chunks: dict[int, bytes] = {}
         for batch in _batched(blocks, PIPELINE_DEPTH):
-            for block in batch:
-                self._socket.sendall(self._request_message(block))
+            self._socket.sendall(b"".join(self._request_message(block)) for block in batch)
             for _ in batch:
                 message = self._recv_until(MSG_PIECE)
                 index = int.from_bytes(message[5:9], "big")
