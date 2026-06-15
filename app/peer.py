@@ -302,10 +302,10 @@ class PeerConnection:
         if chunks.keys() != wanted.keys():
             raise PeerProtocolError("Peer did not return every requested block")
         piece = b"".join(chunks[begin] for _index, begin, _length in blocks)
-        expected = meta.piece_hashes_hex[piece_index]
-        actual = hashlib.sha1(piece).hexdigest()
+        expected = meta.piece_hashes[piece_index]
+        actual = hashlib.sha1(piece).digest()
         if actual != expected:
-            raise PeerProtocolError(f"Invalid piece hash: {actual} | {expected}")
+            raise PeerProtocolError(f"Invalid piece hash: {actual.hex()} | {expected.hex()}")
         logger.debug(
             "piece downloaded",
             extra={
@@ -317,7 +317,7 @@ class PeerConnection:
                 }
             }
         )
-        self._reporter.report(f"valid piece hash: {actual} | {expected}")
+        self._reporter.report(f"valid piece hash: {actual.hex()} | {expected.hex()}")
         return piece
 
     @staticmethod
