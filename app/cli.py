@@ -149,9 +149,18 @@ def main(argv: list[str] | None = None) -> None:
     try:
         args.handler(args, client)
     except BitTorrentError as exc:
+        ctx = {"command": args.command, "error_type": type(exc).__name__ }
+        if exc.__cause__ is not None:
+            ctx["cause"] = repr(exc.__cause__)
+        logger.error(
+            "command failed",
+            extra={"ctx": ctx},
+            exc_info=logger.isEnabledFor(logging.DEBUG)
+        )
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1)
     except KeyboardInterrupt:
+        logger.debug("interrupted by user", extra={"ctx": {"command": args.command}})
         print("interrupted", file=sys.stderr)
         raise SystemExit(130)
 
