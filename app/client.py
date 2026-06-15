@@ -15,7 +15,7 @@ import time
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 
 import bencodepy
 
@@ -32,7 +32,10 @@ from app.models import MagnetLink, Peer, TorrentMetadata
 from app.peer import PeerConnection
 from app.reporting import NullReporter, ProgressReporter
 from app.torrent import load_torrent_file, metadata_from_raw_info
-from app.tracker import TrackerClient
+
+if TYPE_CHECKING:
+    from app.tracker import TrackerClient
+
 
 # How many peers to try for a single piece before giving the whole piece up.
 _PIECE_RETRIES = 3
@@ -46,7 +49,23 @@ class TorrentClient:
     def __init__(self, peer_id: bytes = PEER_ID, reporter: ProgressReporter | None = None) -> None:
         self.peer_id = peer_id
         self._reporter = reporter or NullReporter()
-        self.tracker = TrackerClient(peer_id)
+        self.tracker: TrackerClient | None = None
+
+    @property
+    def tracker(self) -> TrackerClient:
+        """The tracker client, created on first use.
+
+        Importing :mod:`app.tracker` pulls in ``requests``/``urllib3`` - the
+        bulk of CLI cold start - yet commands like ``decode``, ``info`` and
+        ``magnet_parse`` never announce, so the import is deferred until a
+        command actually needs the tracker.
+        """
+
+        if self._tracker is None:
+            from app.tracker import TrackerClient
+
+            self._tracker = TrackerClient(self.peer_id)
+        return self._tracker
 
     def read_metadata(self, path: str) -> TorrentMetadata:
         """Load and parse a ``.torrent`` file into metadata."""
