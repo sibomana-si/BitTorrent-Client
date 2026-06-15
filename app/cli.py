@@ -31,6 +31,40 @@ class StdoutReporter:
         print(message)
 
 
+class _KeyValueFormatter(logging.Formatter):
+    """Terse human format: structured ``ctx`` fields appended as key=value.
+
+    Call sites attach machine-parseable context via
+    ``extra={"ctx": {...}}`` rather than interpolating it into the message, so
+    one event can be rendered as text here or as JSON by
+    :class:`_JsonFormatter` without touching the call site.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        base = super().format(record)
+        ctx = getattr(record, "ctx", None)
+        if not ctx:
+            return base
+        fields = " ".join(f"{key}={value}" for key, value in sorted(ctx.items()))
+        return f"{base} {fields}"
+
+
+class _JsonFormatter(logging.Formatter):
+    """One JSON object per line, ``ctx`` fields flattened in - for ingestion."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "event": record.getMessage(),
+            **(getattr(record, "ctx", None) or {})
+        }
+        if record.exc_info:
+            payload["traceback"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str)
+
+
 def _logging_options() -> argparse.ArgumentParser:
     """The global logging flags, shared by the top-level parser and every
     subcommand (so ``-v`` works before and after the subcommand name).
@@ -55,7 +89,12 @@ def _logging_options() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="explicit diagnostic level (overrides -v)"
     )
-
+    options.add_argument(
+        "--log-format",
+        choices=("text", "json"),
+        default=argparse.SUPPRESS,
+        help="diagnostic format: terse key=value text or JSON lines"
+    )
     return options
 
 
@@ -76,7 +115,7 @@ def _resolve_log_level(args: argparse.Namespace) -> int:
     return DEFAULT_LOG_LEVEL
 
 
-def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
+def _configure_logging(level: int = DEFAULT_LOG_LEVEL, log_format: str = "text") -> None:
     """Attach the stderr diagnostics handler to the ``app`` logger hierarchy.
 
     Configuration belongs to the entry point: modules only emit through
@@ -86,20 +125,24 @@ def _configure_logging(level: int = DEFAULT_LOG_LEVEL) -> None:
     in-process ``main()`` calls never stack handlers or hold a stale stream.
     """
 
+    if log_format == "json":
+        formatter: logging.Formatter = _JsonFormatter()
+    else:
+        formatter = _KeyValueFormatter("%(levelname)s %(name)s: %(message)s")
     app_logger = logging.getLogger("app")
     app_logger.propagate = False
     for handler in list(app_logger.handlers):
         if not isinstance(handler, logging.NullHandler):
             app_logger.removeHandler(handler)
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(levelname)s %(name)s: %(message)s"))
+    handler.setFormatter(formatter)
     app_logger.addHandler(handler)
     app_logger.setLevel(level)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
-    _configure_logging(_resolve_log_level(args))
+    _configure_logging(_resolve_log_level(args), getattr(args, "log_format", "text"))
     client = TorrentClient(reporter=StdoutReporter())
     try:
         args.handler(args, client)
