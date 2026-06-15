@@ -83,6 +83,7 @@ class PeerConnection:
         last_error: Exception | None = None
         for peer in peers:
             started = time.perf_counter()
+            logger.debug("peer connect attempt", extra={"ctx": {"peer": str(peer)}})
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(CONNECT_TIMEOUT)
             try:
@@ -90,6 +91,10 @@ class PeerConnection:
             except OSError as error:  # includes socket.timeout
                 sock.close()
                 last_error = error
+                logger.debug(
+                    "peer connect failed",
+                    extra={"ctx": {"peer": str(peer), "error": str(error)}}
+                )
                 continue
             # Switch to the longer per-message deadline for the live connection.
             sock.settimeout(RECV_TIMEOUT)
@@ -106,6 +111,7 @@ class PeerConnection:
             self._reporter.report(f"connected to {peer.ip}:{peer.port}")
             return
 
+        logger.debug("all peers unreachable", extra={"ctx": {"peers_tried": len(peers)}})
         self._reporter.report("failed to connect to all peers!")
         raise PeerProtocolError("failed to connect to all peers") from last_error
 
@@ -170,12 +176,21 @@ class PeerConnection:
             message = self.recv_message()
             length = int.from_bytes(message[:4], "big")
             if length == 0:
+                logger.debug("keep-alive received")
                 continue # keep-alive: no id, nothing to do
             msg_id = message[4]
             if msg_id == wanted_id:
                 return message
             if msg_id == MSG_CHOKE:
+                logger.debug(
+                    "peer chocked the connection",
+                    extra={"ctx": {"waiting_for": wanted_id}}
+                )
                 raise PeerProtocolError("Peer choked the connection")
+            logger.debug(
+                "skipping informational frame",
+                extra={"ctx": {"msg_id": msg_id, "waiting_for": wanted_id}}
+            )
 
     def send_interested(self) -> None:
         """Announce interest and wait for the peer to unchoke us."""
@@ -183,6 +198,7 @@ class PeerConnection:
         message = (1).to_bytes(4, "big") + MSG_INTERESTED.to_bytes(1, "big")
         self._socket.sendall(message)
         self._recv_until(MSG_UNCHOKE)
+        logger.debug("peer unchoked us")
 
     def _recv_exact(self, count: int) -> bytes:
         """Receive exactly ``count`` bytes, looping over short reads."""
