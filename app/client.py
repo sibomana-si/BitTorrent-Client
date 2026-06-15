@@ -183,6 +183,10 @@ class TorrentClient:
             except PeerProtocolError:
                 if attempt == CONNECT_RETRIES:
                     raise
+                logger.debug(
+                    "retrying peer connect",
+                    extra={"ctx": {"attempt": attempt, "delay_s": round(delay, 2)}}
+                )
                 time.sleep(delay + random.uniform(0, delay))
                 delay *= 2
 
@@ -244,6 +248,7 @@ class TorrentClient:
 
         rotation = 0 # where in the peer list the next fresh connection starts
         opened: list[PeerConnection] = []
+        stats = {"bytes": 0, "piece_failures": 0, "failovers": 0}
 
         def open_ready() -> PeerConnection:
             nonlocal rotation
@@ -269,14 +274,31 @@ class TorrentClient:
                     try:
                         piece = conn.download_piece(meta, piece_index)
                         break
-                    except PeerProtocolError:
+                    except PeerProtocolError as error:
+                        stats["piece_failures"] += 1
+                        logger.debug(
+                            "piece failed",
+                            extra={
+                                "ctx": {
+                                    "piece_index": piece_index,
+                                    "attempt": attempt,
+                                    "error": str(error)
+                                }
+                            }
+                        )
                         if conn is not initial_conn:
                             conn.close()
                         if attempt == _PIECE_RETRIES:
                             raise
+                        stats["failovers"] += 1
+                        logger.debug(
+                            "failing over to the next peer",
+                            extra={"ctx": {"piece_index": piece_index}}
+                        )
                         conn = open_ready()
                 output_file.seek(piece_index * meta.piece_length)
                 output_file.write(piece)
+                stats["bytes"] += len(piece)
                 self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
         finally:
             for conn in opened:

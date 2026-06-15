@@ -75,6 +75,10 @@ def _validate_tracker_url(url: str) -> None:
     for info in resolved:
         ip = info[4][0]
         if _is_blocked_ip(ip):
+            logger.warning(
+                "tracker URL rejected by the SSRF guard",
+                extra={"ctx": {"host": host, "ip": ip}}
+            )
             raise TrackerError(f"Tracker host {host!r} resolves to a blocked address: {ip}")
 
 
@@ -112,7 +116,7 @@ def _get_validated(url: str) -> requests.Response:
     ``MAX_REDIRECTS`` times before giving up.
     """
 
-    for _ in range(MAX_REDIRECTS + 1):
+    for hop in range(MAX_REDIRECTS + 1):
         response = _SESSION.get(url, timeout=_HTTP_TIMEOUT, allow_redirects=False, stream=True)
         if not (response.is_redirect or response.is_permanent_redirect):
             return response
@@ -121,6 +125,10 @@ def _get_validated(url: str) -> requests.Response:
         if not location:
             return response
         url = urljoin(url, location)
+        logger.debug(
+            "following tracker redirect",
+            extra={"ctx": {"hop": hop + 1, "host": urlsplit(url).hostname}}
+        )
         _validate_tracker_url(url)
     raise TrackerError("Too many tracker redirects")
 
@@ -133,6 +141,10 @@ def _read_capped(response: requests.Response) -> bytes:
         total += len(chunk)
         if total > MAX_TRACKER_RESPONSE_BYTES:
             response.close()
+            logger.warning(
+                "tracker response rejected by the size cap",
+                extra={"ctx": {"bytes": total, "cap": MAX_TRACKER_RESPONSE_BYTES}}
+            )
             raise TrackerError("Tracker response exceeded the size limit")
         chunks.append(chunk)
     return b"".join(chunks)

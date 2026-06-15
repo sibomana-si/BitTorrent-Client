@@ -151,6 +151,8 @@ class PeerConnection:
         header = self._recv_exact(4)
         length = int.from_bytes(header, "big")
         if length > _MAX_MESSAGE_LEN:
+            logger.warning("peer message rejected by the size cap",
+                           extra={"ctx": {"bytes": length, "cap": _MAX_MESSAGE_LEN}})
             raise PeerProtocolError(f"Peer announced an oversized message: {length} bytes")
         return header + self._recv_exact(length)
 
@@ -238,6 +240,8 @@ class PeerConnection:
         # negative/huge/missing value can't yield a garbage slice or OOM.
         available = len(response) - 6
         if (not isinstance(total_size, int) or not 0 < total_size <= available or total_size > MAX_METADATA_BYTES):
+            logger.warning("peer metadata rejected by the size guard",
+                           extra={"ctx": {"total_size": total_size, "available": available}})
             raise PeerProtocolError(f"Peer advertised an invalid metadata size: {total_size!r}")
         return response[-total_size:]
 
