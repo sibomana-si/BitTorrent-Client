@@ -237,7 +237,7 @@ class TorrentClient:
                 pass
             raise
 
-    def _atomic_write(self, output_path: str, data: bytes) -> None:
+    def _atomic_write(self, output_path: str, data: bytes | bytearray) -> None:
         """Atomically write a single in-memory blob (used for single pieces)."""
 
         with self._atomic_output(output_path) as output_file:

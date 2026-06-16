@@ -15,7 +15,6 @@ import time
 from collections.abc import Sequence
 
 import bencodepy
-from fontTools.otlLib.builder import buildLigCaretList
 
 from app.constants import (
     BLOCK_SIZE,
@@ -274,18 +273,21 @@ class PeerConnection:
         )
         self._socket.sendall(message)
 
-    def download_piece(self, meta: TorrentMetadata, piece_index: int) -> bytes:
+    def download_piece(self, meta: TorrentMetadata, piece_index: int) -> bytearray:
         """Download one piece, verify its SHA-1, and return its bytes."""
 
         self._reporter.report(f"downloading piece_index: {piece_index} ...")
         started = time.perf_counter()
         blocks = self._block_requests(meta, piece_index)
 
-        # Key returned blocks by their offset so out-of-order responses are
-        # reassembled correclty, and reject any block that does not match a
-        # request we actually made (wrong piece, unexpected offset/length).
+        # Slot returned blocks into a preallocated buffer at their offset so
+        # out-of-order responses are reassembled correctly (and without holding
+        # a second copy of the piece, as a per-block dict + join would), and
+        # reject any block that does not match a request we actually made
+        # (wrong piece, unexpected offset/length).
         wanted = {begin: length for _index, begin, length in blocks}
-        chunks: dict[int, bytes] = {}
+        piece = bytearray(sum(wanted.values()))
+        received: set[int] = set()
         # Sliding window: keep PIPELINE_DEPTH requests in flight, sending the next pending request as each block arrives.
         sent = min(PIPELINE_DEPTH, len(blocks))
         self._socket.sendall(b"".join(self._request_message(block) for block in blocks[:sent]))
@@ -301,13 +303,13 @@ class PeerConnection:
                     f"Peer returned a short block at begin={begin}: "
                     f"{len(block_data)} != {wanted[begin]}"
                 )
-            chunks[begin] = block_data
+            piece[begin : begin + len(block_data)] = block_data
+            received.add(begin)
             if sent < len(blocks):
                 self._socket.sendall(self._request_message(blocks[sent]))
                 sent += 1
-        if chunks.keys() != wanted.keys():
+        if received != wanted.keys():
             raise PeerProtocolError("Peer did not return every requested block")
-        piece = b"".join(chunks[begin] for _index, begin, _length in blocks)
         expected = meta.piece_hashes[piece_index]
         actual = hashlib.sha1(piece).digest()
         if actual != expected:
