@@ -48,7 +48,7 @@ CONNECT_RETRIES = 3  # total attempts to reach the peer set before giving up
 RETRY_BASE_DELAY = 0.5  # seconds; doubled (plus jitter) between attempts
 
 # How many block requests to keep in flight at once (pipelining depth).
-PIPELINE_DEPTH = 4
+PIPELINE_DEPTH = 16
 
 # Fixed handshake protocol string and its companion reserved-bytes field.
 PROTOCOL_NAME = b"BitTorrent protocol"
