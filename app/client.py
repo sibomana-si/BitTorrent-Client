@@ -11,7 +11,10 @@ import logging
 import os
 import random
 import tempfile
+import threading
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
@@ -22,6 +25,7 @@ import bencodepy
 from app.constants import (
     CONNECT_RETRIES,
     MAGNET_STUB_LENGTH,
+    MAX_PEERS_ENV_VAR,
     MAX_TORRENT_LENGTH,
     PEER_ID,
     RETRY_BASE_DELAY
@@ -43,13 +47,60 @@ _PIECE_RETRIES = 3
 logger = logging.getLogger(__name__)
 
 
+def _max_peer_connections() -> int:
+    """Worker-connection count for full downloads (from the environment).
+
+    Unset, unparseable or < 1 all mean 1: the sequential single-connection
+    path, whose output the test suite asserts byte-for-byte.
+    """
+
+    try:
+        value = int(os.environ.get(MAX_PEERS_ENV_VAR, ""))
+    except ValueError:
+        return 1
+    return max(value, 1)
+
+
+class _BufferReporter:
+    """Collects one piece's progress lines for ordered release."""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def report(self, message: str) -> None:
+        self.lines.append(message)
+
+
+class _OrderedProgress:
+    """Releases buffered per-piece progress lines in piece-index order.
+
+    Concurrent workers finish pieces out of order, but the progress output
+    lists pieces strictly by index, so each piece's buffer is held until every
+    earlier piece has delivered its own.
+    """
+
+    def __init__(self, reporter: ProgressReporter) -> None:
+        self._reporter = reporter
+        self._lock = threading.Lock()
+        self._next = 0
+        self._held: dict[int, list[str]] = {}
+
+    def deliver(self, piece_index: int, lines: list[str]) -> None:
+        with self._lock:
+            self._held[piece_index] = lines
+            while self._next in self._held:
+                for line in self._held.pop(self._next):
+                    self._reporter.report(line)
+                self._next += 1
+
+
 class TorrentClient:
     """High-level operations over a torrent or a magnet link."""
 
     def __init__(self, peer_id: bytes = PEER_ID, reporter: ProgressReporter | None = None) -> None:
         self.peer_id = peer_id
         self._reporter = reporter or NullReporter()
-        self.tracker: TrackerClient | None = None
+        self._tracker: TrackerClient | None = None
 
     @property
     def tracker(self) -> TrackerClient:
@@ -263,63 +314,87 @@ class TorrentClient:
         no longer dooms the whole download. ``initial_conn`` is an
         already-prepared connection (the magnet metadata socket) owned by the
         caller; replacement connections are owned and closed here.
+
+        ``BITTORRENT_MAX_PEERS`` above 1 stripes pieces across that many peer
+        connections; piece progress lines are still released strictly in
+        piece-index order.
         """
 
         rotation = 0 # where in the peer list the next fresh connection starts
+        rotation_lock = threading.Lock()
         opened: list[PeerConnection] = []
         stats = {"bytes": 0, "piece_failures": 0, "failovers": 0}
+        stats_lock = threading.Lock()
 
-        def open_ready() -> PeerConnection:
+        def open_ready(reporter: ProgressReporter) -> PeerConnection:
             nonlocal rotation
-            conn = PeerConnection(self.peer_id, reporter=self._reporter)
-            opened.append(conn)
-            count = len(peers) or 1
-            start = rotation % count
+            conn = PeerConnection(self.peer_id, reporter=reporter)
+            with rotation_lock:
+                opened.append(conn)
+                count = len(peers) or 1
+                start = rotation % count
+                rotation = start + 1
             ordered = list(peers[start:]) + list(peers[:start])
             self._connect_with_retry(conn, ordered)
             conn.handshake(info_hash, magnet=magnet)
             conn.send_interested()
-            rotation = start + 1
             return conn
 
-        # Open the connection (for torrent) before announcing progress so the
-        # "connected to ..." line keeps its original position in the output.
-        conn = initial_conn if initial_conn is not None else open_ready()
+        def download_one(
+                conn: PeerConnection,
+                piece_index: int,
+                reporter: ProgressReporter
+        ) -> tuple[PeerConnection, bytearray]:
+            """One piece with per-piece failover; returns the live connection."""
+
+            for attempt in range(1, _PIECE_RETRIES + 1):
+                try:
+                    return conn, conn.download_piece(meta, piece_index)
+                except PeerProtocolError as error:
+                    with stats_lock:
+                        stats["piece_failures"] += 1
+                    logger.debug(
+                        "piece failed",
+                        extra={
+                            "ctx": {
+                                "piece_index": piece_index,
+                                "attempt": attempt,
+                                "error": str(error)
+                            }
+                        }
+                    )
+                    if conn is not initial_conn:
+                        conn.close()
+                    if attempt == _PIECE_RETRIES:
+                        raise
+                    with stats_lock:
+                        stats["failovers"] += 1
+                    logger.debug(
+                        "failing over to the next peer",
+                        extra={"ctx": {"piece_index": piece_index}}
+                    )
+                    conn = open_ready(reporter)
+            raise AssertionError("unreachable: the retry loop returns or raises")
+
+        workers = min(_max_peer_connections(), len(meta.piece_hashes))
+        # Open every connection (for torrent) before announcing progress so the
+        # "connected to ..." line(s) keep a deterministic position in the output.
+        conns = [] if initial_conn is None else [initial_conn]
+        conns += [open_ready(self._reporter) for _ in range(workers - len(conns))]
         self._reporter.report(f"downloading to {output_path} ...")
         self._reporter.report(f"pieces to download: {len(meta.piece_hashes)}")
         started = time.perf_counter()
         try:
-            for piece_index in range(len(meta.piece_hashes)):
-                for attempt in range(1, _PIECE_RETRIES + 1):
-                    try:
-                        piece = conn.download_piece(meta, piece_index)
-                        break
-                    except PeerProtocolError as error:
-                        stats["piece_failures"] += 1
-                        logger.debug(
-                            "piece failed",
-                            extra={
-                                "ctx": {
-                                    "piece_index": piece_index,
-                                    "attempt": attempt,
-                                    "error": str(error)
-                                }
-                            }
-                        )
-                        if conn is not initial_conn:
-                            conn.close()
-                        if attempt == _PIECE_RETRIES:
-                            raise
-                        stats["failovers"] += 1
-                        logger.debug(
-                            "failing over to the next peer",
-                            extra={"ctx": {"piece_index": piece_index}}
-                        )
-                        conn = open_ready()
-                output_file.seek(piece_index * meta.piece_length)
-                output_file.write(piece)
-                stats["bytes"] += len(piece)
-                self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
+            if workers <= 1:
+                conn = conns[0]
+                for piece_index in range(len(meta.piece_hashes)):
+                    conn, piece = download_one(conn, piece_index, self._reporter)
+                    output_file.seek(piece_index * meta.piece_length)
+                    output_file.write(piece)
+                    stats["bytes"] += len(piece)
+                    self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
+            else:
+                self._download_concurrently(meta, output_file, conns, download_one, stats, stats_lock)
 
             elapsed = time.perf_counter() - started
             logger.info(
@@ -340,3 +415,53 @@ class TorrentClient:
         finally:
             for conn in opened:
                 conn.close()
+
+    def _download_concurrently(
+            self,
+            meta: TorrentMetadata,
+            output_file: BinaryIO,
+            conns: list[PeerConnection],
+            download_one,
+            stats: dict[str, int],
+            stats_lock: threading.Lock
+    ) -> None:
+        """Stripe the pieces across the worker connections.
+
+        Each worker claims the next undone piece, buffers that piece's progress
+        lines, and writes the verified bytes with ``os.pwrite`` at the absolute
+        offset (positional writes need no shared seek pointer). Buffers are
+        released through :class:`_OrderedProgress` so the output lists pieces
+        strictly by index. A failed piece (retries exhausted) stops the other
+        workers at their next claim and propagates from here.
+        """
+
+        output_file.flush()
+        fd = output_file.fileno()
+        ordered = _OrderedProgress(self._reporter)
+        remaining = deque(range(len(meta.piece_hashes)))
+        abort = threading.Event()
+
+        def run(conn: PeerConnection) -> None:
+            while not abort.is_set():
+                try:
+                    piece_index = remaining.popleft()
+                except IndexError:
+                    return
+                buffer = _BufferReporter()
+                conn.rebind_reporter(buffer)
+                try:
+                    conn, piece = download_one(conn, piece_index, buffer)
+                except Exception:
+                    abort.set()
+                    ordered.deliver(piece_index, buffer.lines)
+                    raise
+                os.pwrite(fd, piece, piece_index * meta.piece_length)
+                with stats_lock:
+                    stats["bytes"] += len(piece)
+                buffer.report(f"piece_{piece_index} | {len(piece)} downloaded.")
+                ordered.deliver(piece_index, buffer.lines)
+
+        with ThreadPoolExecutor(max_workers=len(conns)) as pool:
+            futures = [pool.submit(run, conn) for conn in conns]
+        for future in futures:
+            future.result()

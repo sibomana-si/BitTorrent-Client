@@ -77,6 +77,16 @@ class PeerConnection:
             raise RuntimeError("Not connected to a peer")
         return self._sock
 
+    def rebind_reporter(self, reporter: ProgressReporter) -> None:
+        """Route subsequent progress lines to ``reporter``.
+
+        The concurrent downloader buffers each piece's lines so they can be
+        released in piece-index order; a connection outlives any single piece,
+        so its reporter is swapped as it moves between pieces.
+        """
+
+        self._reporter = reporter
+
     def connect(self, peers: Sequence[Peer]) -> None:
         """Connect to the first reachable peer, trying each in turn."""
 

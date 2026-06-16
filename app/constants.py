@@ -50,6 +50,11 @@ RETRY_BASE_DELAY = 0.5  # seconds; doubled (plus jitter) between attempts
 # How many block requests to keep in flight at once (pipelining depth).
 PIPELINE_DEPTH = 16
 
+# Opt-in cap on concurrent peer connections for a full download. Unset or 1
+# keeps the original single-connection sequential behavior (and its exact
+# output); higher values stripe pieces across that many peers.
+MAX_PEERS_ENV_VAR = "BITTORRENT_MAX_PEERS"
+
 # Fixed handshake protocol string and its companion reserved-bytes field.
 PROTOCOL_NAME = b"BitTorrent protocol"
 
