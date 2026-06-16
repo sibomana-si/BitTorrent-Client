@@ -211,7 +211,7 @@ class TrackerClient:
         peers = []
         for offset in range(0, len(blob), _PEER_RECORD_LEN):
             record = blob[offset : offset + _PEER_RECORD_LEN]
-            ip = ".".join(str(byte) for byte in record[:4])
+            ip = socket.inet_ntoa(record[:4])
             port = int.from_bytes(record[4:6], "big")
             peers.append(Peer(ip, port))
         return peers
