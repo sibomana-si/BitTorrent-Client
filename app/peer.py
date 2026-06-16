@@ -163,7 +163,13 @@ class PeerConnection:
                 extra={"ctx": {"bytes": length, "cap": _MAX_MESSAGE_LEN}}
             )
             raise PeerProtocolError(f"Peer announced an oversized message: {length} bytes")
-        return header + self._recv_exact(length)
+        # Receive the body straight into the message buffer behind the header,
+        # rather than concatenating two separately assembled byte strings.
+        message = bytearray(4 + length)
+        message[:4] = header
+        if length:
+            self._recv_into(memoryview(message)[4:])
+        return bytes(message)
 
     def _recv_until(self, wanted_id: int) -> bytes:
         """Read frames until one with id ``wanted_id`` arrives (header included).
@@ -206,18 +212,26 @@ class PeerConnection:
     def _recv_exact(self, count: int) -> bytes:
         """Receive exactly ``count`` bytes, looping over short reads."""
 
-        chunks = []
-        remaining = count
-        while remaining:
+        buffer = bytearray(count)
+        self._recv_into(memoryview(buffer))
+        return bytes(buffer)
+
+    def _recv_into(self, view: memoryview) -> None:
+        """Fill ``view`` completely from the socket, looping over short reads.
+
+        ``recv_into`` writes each chunk at its final offset, so reassembly
+        needs no per-chunk allocations and no joining copy.
+        """
+
+        filled = 0
+        while filled < len(view):
             try:
-                chunk = self._socket.recv(remaining)
-            except OSError as exc: # includes socket.timeout and resets
+                read = self._socket.recv_into(view[filled:])
+            except OSError as exc:
                 raise PeerProtocolError(f"Peer read failed: {exc}") from exc
-            if not chunk:
+            if not read:
                 raise PeerProtocolError("Peer closed the connection")
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
+            filled += read
 
     def extension_handshake(self) -> int:
         """Negotiate the metadata extension; return the peer's ut_metadata id."""
