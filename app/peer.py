@@ -12,9 +12,10 @@ import hashlib
 import logging
 import socket
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 
 import bencodepy
+from fontTools.otlLib.builder import buildLigCaretList
 
 from app.constants import (
     BLOCK_SIZE,
@@ -158,8 +159,10 @@ class PeerConnection:
         header = self._recv_exact(4)
         length = int.from_bytes(header, "big")
         if length > _MAX_MESSAGE_LEN:
-            logger.warning("peer message rejected by the size cap",
-                           extra={"ctx": {"bytes": length, "cap": _MAX_MESSAGE_LEN}})
+            logger.warning(
+                "peer message rejected by the size cap",
+                extra={"ctx": {"bytes": length, "cap": _MAX_MESSAGE_LEN}}
+            )
             raise PeerProtocolError(f"Peer announced an oversized message: {length} bytes")
         return header + self._recv_exact(length)
 
@@ -283,22 +286,25 @@ class PeerConnection:
         # request we actually made (wrong piece, unexpected offset/length).
         wanted = {begin: length for _index, begin, length in blocks}
         chunks: dict[int, bytes] = {}
-        for batch in _batched(blocks, PIPELINE_DEPTH):
-            self._socket.sendall(b"".join(self._request_message(block)) for block in batch)
-            for _ in batch:
-                message = self._recv_until(MSG_PIECE)
-                index = int.from_bytes(message[5:9], "big")
-                begin = int.from_bytes(message[9:13], "big")
-                block_data = message[_PIECE_HEADER_LEN:]
-                if index != piece_index or begin not in wanted:
-                    raise PeerProtocolError(f"Peer returned an unexpected block: index={index} begin={begin}")
-                if len(block_data) != wanted[begin]:
-                    raise PeerProtocolError(
-                        f"Peer returned a short block at begin={begin}: "
-                        f"{len(block_data)} != {wanted[begin]}"
-                    )
-                chunks[begin] = block_data
-
+        # Sliding window: keep PIPELINE_DEPTH requests in flight, sending the next pending request as each block arrives.
+        sent = min(PIPELINE_DEPTH, len(blocks))
+        self._socket.sendall(b"".join(self._request_message(block) for block in blocks[:sent]))
+        for _ in blocks:
+            message = self._recv_until(MSG_PIECE)
+            index = int.from_bytes(message[5:9], "big")
+            begin = int.from_bytes(message[9:13], "big")
+            block_data = message[_PIECE_HEADER_LEN:]
+            if index != piece_index or begin not in wanted:
+                raise PeerProtocolError(f"Peer returned an unexpected block: index={index} begin={begin}")
+            if len(block_data) != wanted[begin]:
+                raise PeerProtocolError(
+                    f"Peer returned a short block at begin={begin}: "
+                    f"{len(block_data)} != {wanted[begin]}"
+                )
+            chunks[begin] = block_data
+            if sent < len(blocks):
+                self._socket.sendall(self._request_message(blocks[sent]))
+                sent += 1
         if chunks.keys() != wanted.keys():
             raise PeerProtocolError("Peer did not return every requested block")
         piece = b"".join(chunks[begin] for _index, begin, _length in blocks)
@@ -351,13 +357,6 @@ class PeerConnection:
         )
 
 
-def _batched(items: Sequence, size: int) -> Iterator[Sequence]:
-    """Yield successive ``size``-length slices of ``items``."""
-
-    for start in range(0, len(items), size):
-        yield items[start : start + size]
-
-
 def _decode_leading(buf: bytes) -> dict:
     """Decode just the leading bencoded dict, ignoring any trailing bytes.
 
@@ -370,4 +369,3 @@ def _decode_leading(buf: bytes) -> dict:
     decoder = bencodepy.BencodeDecoder()
     value, _consumed = decoder.decode_func[buf[:1]](buf, 0)
     return value
-
