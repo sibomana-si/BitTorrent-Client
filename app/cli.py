@@ -14,7 +14,12 @@ import os
 import sys
 
 from app.client import TorrentClient
-from app.constants import DEFAULT_LOG_LEVEL, LOG_BLOCK_SAMPLE_RATE, LOG_LEVEL_ENV_VAR
+from app.constants import (
+    DEFAULT_LOG_LEVEL,
+    LOG_BLOCK_SAMPLE_RATE,
+    LOG_LEVEL_ENV_VAR,
+    LOG_REDACT_ENV_VAR
+)
 from app.errors import BitTorrentError
 from app.models import Peer, TorrentMetadata
 from app.reporting import CompositeReporter, LoggingReporter
@@ -23,6 +28,8 @@ from app.reporting import CompositeReporter, LoggingReporter
 logger = logging.getLogger(__name__)
 
 _LOG_LEVEL_CHOICES = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+_REDACT_ADDRESS_KEYS = ("peer", "address")
+_REDACT_HOST_KEYS = ("ip", "host")
 
 
 class StdoutReporter:
@@ -90,6 +97,49 @@ class _SamplingFilter(logging.Filter):
         return count % self._rate == 0
 
 
+class _RedactionFilter(logging.Filter):
+    """Mask sensitive ctx fields so a verbose log excerpt is shareable.
+
+    Peer addresses, hostnames/IPs, the peer id, and a full info hash identify who
+    the client talked to. When enabled, mask them on a *copy* of the record's
+    ctx, leaving the in-memory entity (and any other handler's own pass)
+    untouched.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        ctx = getattr(record, "ctx", None)
+        if ctx:
+            record.ctx = {key: _redact(key, value) for key, value in ctx.items()}
+        return True
+
+
+def _redact(key: str, value):
+    if key in _REDACT_ADDRESS_KEYS:
+        return _mask_address(value)
+    if key in _REDACT_HOST_KEYS:
+        return _mask_host(value)
+    if key == "peer_id":
+        text = str(value)
+        return f"{text[:4]}..." if len(text) > 4 else "..."
+    if key == "info_hash":
+        return str(value)[:8]
+    return value
+
+
+def _mask_address(value):
+    host, sep, port = str(value).rpartition(":")
+    if not sep:
+        return _mask_host(value)
+    return f"{_mask_host(host)}:{port}"
+
+
+def _mask_host(value):
+    parts = str(value).split(".")
+    if len(parts) == 4 and all(part.isdigit() for part in parts):
+        return f"{parts[0]}.x.x.x"
+    return "<redacted>"
+
+
 def _logging_options() -> argparse.ArgumentParser:
     """The global logging flags, shared by the top-level parser and every
     subcommand (so ``-v`` works before and after the subcommand name).
@@ -120,7 +170,19 @@ def _logging_options() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="diagnostic format: terse key=value text or JSON lines"
     )
+    options.add_argument(
+        "--log-redact",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="mask peer addresses / ids in diagnostics so a log is shareable"
+    )
     return options
+
+
+def _env_flag(name: str) -> bool:
+    """A truthy environment variable (1/true/yes/on), case-insensitive."""
+
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _resolve_log_level(args: argparse.Namespace) -> int:
@@ -140,7 +202,12 @@ def _resolve_log_level(args: argparse.Namespace) -> int:
     return DEFAULT_LOG_LEVEL
 
 
-def _configure_logging(level: int = DEFAULT_LOG_LEVEL, log_format: str = "text") -> None:
+def _configure_logging(
+        level: int = DEFAULT_LOG_LEVEL,
+        log_format: str = "text",
+        *,
+        redact: bool = False
+) -> None:
     """Attach the stderr diagnostics handler to the ``app`` logger hierarchy.
 
     Configuration belongs to the entry point: modules only emit through
@@ -162,13 +229,16 @@ def _configure_logging(level: int = DEFAULT_LOG_LEVEL, log_format: str = "text")
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
     handler.addFilter(_SamplingFilter(LOG_BLOCK_SAMPLE_RATE))
+    if redact:
+        handler.addFilter(_RedactionFilter())
     app_logger.addHandler(handler)
     app_logger.setLevel(level)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
-    _configure_logging(_resolve_log_level(args), getattr(args, "log_format", "text"))
+    redact = getattr(args, "log_redact", False) or _env_flag(LOG_REDACT_ENV_VAR)
+    _configure_logging(_resolve_log_level(args), getattr(args, "log_format", "text"), redact=redact)
     reporter = CompositeReporter(StdoutReporter(), LoggingReporter())
     client = TorrentClient(reporter=reporter)
     try:
