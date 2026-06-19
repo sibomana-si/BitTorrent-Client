@@ -14,7 +14,7 @@ import os
 import sys
 
 from app.client import TorrentClient
-from app.constants import DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV_VAR
+from app.constants import DEFAULT_LOG_LEVEL, LOG_BLOCK_SAMPLE_RATE, LOG_LEVEL_ENV_VAR
 from app.errors import BitTorrentError
 from app.models import Peer, TorrentMetadata
 from app.reporting import CompositeReporter, LoggingReporter
@@ -64,6 +64,30 @@ class _JsonFormatter(logging.Formatter):
         if record.exc_info:
             payload["traceback"] = self.formatException(record.exc_info)
         return json.dumps(payload, default=str)
+
+
+class _SamplingFilter(logging.Filter):
+    """Thin out high-frequency records so they don't flood a verbose log.
+
+    A record opts in by carrying a truthy ``sampled`` attribute (set via
+    ``extra={"sampled": True}`` at the call site); such records are counted per
+    ``(logger, message)`` and only every Nth is emitted. Every other record
+    passes untouched, so ordinary lines are never dropped. One filter instance
+    lives per handler, so each output stream samples independently.
+    """
+
+    def __init__(self, rate: int = LOG_BLOCK_SAMPLE_RATE) -> None:
+        super().__init__()
+        self._rate = max(1, rate)
+        self._counts: dict[tuple[str, str], int] = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not getattr(record, "sampled", False):
+            return True
+        key = (record.name, str(record.msg))
+        count = self._counts.get(key, 0)
+        self._counts[key] = count + 1
+        return count % self._rate == 0
 
 
 def _logging_options() -> argparse.ArgumentParser:
@@ -137,6 +161,7 @@ def _configure_logging(level: int = DEFAULT_LOG_LEVEL, log_format: str = "text")
             app_logger.removeHandler(handler)
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(formatter)
+    handler.addFilter(_SamplingFilter(LOG_BLOCK_SAMPLE_RATE))
     app_logger.addHandler(handler)
     app_logger.setLevel(level)
 

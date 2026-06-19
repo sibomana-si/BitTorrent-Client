@@ -332,6 +332,16 @@ class PeerConnection:
                 )
             piece[begin : begin + len(block_data)] = block_data
             received.add(begin)
+            if logger.isEnabledFor(logging.DEBUG):
+                # Marked ``sampled`` so the CLI's sampling filter thins these
+                # high-frequency events; guarded so the silent path builds nothing.
+                logger.debug(
+                    "block received",
+                    extra={
+                        "ctx": {"piece_index": piece_index, "begin": begin, "len": len(block_data)},
+                        "sampled": True
+                    }
+                )
             if sent < len(blocks):
                 self._socket.sendall(self._request_message(blocks[sent]))
                 sent += 1
