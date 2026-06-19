@@ -181,8 +181,18 @@ class TrackerClient:
 
         try:
             decoded = bencodepy.decode(body)
+        except bencodepy.BencodeDecodeError as exc:
+            raise TrackerError(f"Unexpected tracker response: {exc}") from exc
+
+        if isinstance(decoded, dict) and b"failure reason" in decoded:
+            reason = decoded[b"failure reason"]
+            if isinstance(reason, bytes):
+                reason = reason.decode(errors="replace")
+            raise TrackerError(f"Tracker returned failure: {reason}")
+
+        try:
             peers = decoded[b"peers"]
-        except (bencodepy.BencodeDecodeError, KeyError, TypeError) as exc:
+        except (KeyError, TypeError) as exc:
             raise TrackerError(f"Unexpected tracker response: {exc}") from exc
 
         parsed = self._parse_peers(peers)
