@@ -10,13 +10,18 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import logging.handlers
 import os
 import sys
+import uuid
 
 from app.client import TorrentClient
 from app.constants import (
     DEFAULT_LOG_LEVEL,
     LOG_BLOCK_SAMPLE_RATE,
+    LOG_FILE_BACKUPS,
+    LOG_FILE_ENV_VAR,
+    LOG_FILE_MAX_BYTES,
     LOG_LEVEL_ENV_VAR,
     LOG_REDACT_ENV_VAR
 )
@@ -140,6 +145,25 @@ def _mask_host(value):
     return "<redacted>"
 
 
+class _RunIdFilter(logging.Filter):
+    """Stamp a per-invocation run id onto every record so one run correlates.
+
+    Injected into a copy of ctx, so it renders as ``run_id=...`` (text) or a
+    top-level field (JSON). Opt-in (``--log-run-id``, and implied by a log
+    file), so default verbose output keeps its existing field order.
+    """
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__()
+        self._run_id = run_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        ctx = dict(getattr(record, "ctx", None) or {})
+        ctx["run_id"] = self._run_id
+        record.ctx = ctx
+        return True
+
+
 def _logging_options() -> argparse.ArgumentParser:
     """The global logging flags, shared by the top-level parser and every
     subcommand (so ``-v`` works before and after the subcommand name).
@@ -176,6 +200,18 @@ def _logging_options() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="mask peer addresses / ids in diagnostics so a log is shareable"
     )
+    options.add_argument(
+        "--log-run-id",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="stamp a per-invocation run id onto every diagnostic record"
+    )
+    options.add_argument(
+        "--log-file",
+        metavar="PATH",
+        default=argparse.SUPPRESS,
+        help="also write JSON-lines diagnostics to a rotating file at PATH"
+    )
     return options
 
 
@@ -206,39 +242,75 @@ def _configure_logging(
         level: int = DEFAULT_LOG_LEVEL,
         log_format: str = "text",
         *,
-        redact: bool = False
+        redact: bool = False,
+        run_id: str | None = None,
+        log_file: str | None = None,
 ) -> None:
-    """Attach the stderr diagnostics handler to the ``app`` logger hierarchy.
+    """Attach the diagnostics handlers to the ``app`` logger hierarchy.
 
     Configuration belongs to the entry point: modules only emit through
-    ``logging.getLogger(__name__)``. The handler goes on the ``app`` root with
+    ``logging.getLogger(__name__)``. Handlers go on the ``app`` root with
     propagation off, so records never reach the global root (or its lastResort
-    handler). Re-invocation replaces the previous handler, so repeated
+    handler). Re-invocation replaces the previous handlers, so repeated
     in-process ``main()`` calls never stack handlers or hold a stale stream.
+
+    A stderr handler is always attached; when ``log_file`` is given a rotating
+    JSON-lines file handler is added alongside it for durable diagnostics.
     """
 
-    if log_format == "json":
-        formatter: logging.Formatter = _JsonFormatter()
-    else:
-        formatter = _KeyValueFormatter("%(levelname)s %(name)s: %(message)s")
     app_logger = logging.getLogger("app")
     app_logger.propagate = False
     for handler in list(app_logger.handlers):
         if not isinstance(handler, logging.NullHandler):
             app_logger.removeHandler(handler)
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(formatter)
+
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(_log_formatter(log_format))
+    _attach_filters(stderr_handler, redact=redact, run_id=run_id)
+    app_logger.addHandler(stderr_handler)
+
+    if log_file:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=LOG_FILE_MAX_BYTES, backupCount=LOG_FILE_BACKUPS
+        )
+        file_handler.setFormatter(_JsonFormatter())
+        _attach_filters(file_handler, redact=redact, run_id=run_id)
+        app_logger.addHandler(file_handler)
+
+    app_logger.setLevel(level)
+
+
+def _log_formatter(log_format: str) -> logging.Formatter:
+    if log_format == "json":
+        return _JsonFormatter()
+    return _KeyValueFormatter("%(levelname)s %(name)s: %(message)s")
+
+
+def _attach_filters(handler: logging.Handler, *, redact: bool, run_id: str | None) -> None:
+    """One fresh filter set per handler (sampling state must not be shared)."""
+
     handler.addFilter(_SamplingFilter(LOG_BLOCK_SAMPLE_RATE))
+    if run_id is not None:
+        handler.addFilter(_RunIdFilter(run_id))
     if redact:
         handler.addFilter(_RedactionFilter())
-    app_logger.addHandler(handler)
-    app_logger.setLevel(level)
 
 
 def main(argv: list[str] | None = None) -> None:
     args = _build_parser().parse_args(argv)
     redact = getattr(args, "log_redact", False) or _env_flag(LOG_REDACT_ENV_VAR)
-    _configure_logging(_resolve_log_level(args), getattr(args, "log_format", "text"), redact=redact)
+    log_file = getattr(args, "log_file", None) or os.environ.get(LOG_FILE_ENV_VAR) or None
+    level = _resolve_log_level(args)
+    if log_file and level >= DEFAULT_LOG_LEVEL:
+        level = logging.INFO
+    run_id = uuid.uuid4().hex[:8] if (getattr(args, "log_run_id", False) or log_file) else None
+    _configure_logging(
+        level,
+        getattr(args, "log_format", "text"),
+        redact=redact,
+        run_id=run_id,
+        log_file=log_file
+    )
     reporter = CompositeReporter(StdoutReporter(), LoggingReporter())
     client = TorrentClient(reporter=reporter)
     try:

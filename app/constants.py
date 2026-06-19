@@ -25,6 +25,12 @@ LOG_BLOCK_SAMPLE_RATE = 64
 # verbose log excerpt can be shared without leaking who the client talked to.
 LOG_REDACT_ENV_VAR = "BITTORRENT_LOG_REDACT"
 
+# Opt-in durable diagnostics: when a path is given (flag or env), JSON-lines
+# records are also written to a rotating file, bounded by these limits.
+LOG_FILE_ENV_VAR = "BITTORRENT_LOG_FILE"
+LOG_FILE_MAX_BYTES = 2**20 # 1 MiB per file before rotation
+LOG_FILE_BACKUPS = 3
+
 # Identifier this client announces to trackers and peers (must be 20 bytes).
 PEER_ID = b"00112233445566998877"
 
