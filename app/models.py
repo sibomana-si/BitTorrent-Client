@@ -33,10 +33,17 @@ class MagnetLink:
 
     info_hash: bytes
     tracker_url: str
+    trackers: tuple[str, ...] = ()
 
     @property
     def info_hash_hex(self) -> str:
         return self.info_hash.hex()
+
+    @property
+    def announce_urls(self) -> list[str]:
+        """Trackers to try in order; the primary ``tracker_url`` when none extra."""
+
+        return list(self.trackers) or [self.tracker_url]
 
 
 @dataclass(frozen=True)
@@ -48,6 +55,7 @@ class TorrentMetadata:
     info_hash: bytes
     piece_length: int
     piece_hashes: list[bytes]
+    trackers: tuple[str, ...] = ()
 
     @property
     def info_hash_hex(self) -> str:
@@ -56,3 +64,9 @@ class TorrentMetadata:
     @property
     def piece_hashes_hex(self) -> list[str]:
         return [piece_hash.hex() for piece_hash in self.piece_hashes]
+
+    @property
+    def announce_urls(self) -> list[str]:
+        """Trackers to try in order; the primary ``tracker_url`` when none extra."""
+
+        return list(self.trackers) or [self.tracker_url]

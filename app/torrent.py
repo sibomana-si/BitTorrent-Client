@@ -42,7 +42,28 @@ def load_torrent_file(path: str) -> TorrentMetadata:
     except (bencodepy.BencodeDecodeError, KeyError) as exc:
         raise InvalidTorrentError(f"Malformed torrent file: {path}") from exc
     info_hash = hashlib.sha1(bencodepy.encode(info)).digest()
-    return _build(decoded[b"announce"].decode(), info, info_hash)
+    announce = decoded[b"announce"].decode()
+    trackers = _tracker_urls(announce, decoded.get(b"announce-list"))
+    return _build(announce, info, info_hash, trackers=trackers)
+
+
+def _tracker_urls(announce: str, announce_list) -> tuple[str, ...]:
+    """Ordered, de-duplicated tracker URLs for failover.
+
+    The primary ``announce`` comes first, then every URL from the optional
+    BEP-12 ``announce-list`` (a list of tiers, each a list of URLs). Order is
+    preserved and duplicates dropped so a download tries each distinct tracker
+    once. Returns ``()`` when there is only the primary announce, so a
+    single-tracker torrent leaves ``trackers`` empty and falls back to
+    ``tracker_url`` (and stays equal to the same torrent fetched via magnet).
+    """
+
+    urls = [announce]
+    for tier in announce_list or []:
+        for url in tier:
+            urls.append(url.decode() if isinstance(url, bytes) else url)
+    deduped = tuple(dict.fromkeys(urls))
+    return deduped if len(deduped) > 1 else ()
 
 
 def metadata_from_raw_info(tracker_url: str, raw_info: bytes, expected_hash: bytes | None = None) -> TorrentMetadata:
@@ -63,7 +84,7 @@ def metadata_from_raw_info(tracker_url: str, raw_info: bytes, expected_hash: byt
         raise InvalidTorrentError(f"Malformed metadata received from peer: {exc}") from exc
 
 
-def _build(tracker_url: str, info: dict, info_hash: bytes) -> TorrentMetadata:
+def _build(tracker_url: str, info: dict, info_hash: bytes, *, trackers: tuple[str, ...] = ()) -> TorrentMetadata:
     length = info[b"length"]
     piece_length = info[b"piece length"]
     pieces = info[b"pieces"]
@@ -96,5 +117,6 @@ def _build(tracker_url: str, info: dict, info_hash: bytes) -> TorrentMetadata:
         length=length,
         info_hash=info_hash,
         piece_length=piece_length,
-        piece_hashes=piece_hashes
+        piece_hashes=piece_hashes,
+        trackers=trackers
     )

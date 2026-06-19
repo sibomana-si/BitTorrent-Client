@@ -30,7 +30,7 @@ from app.constants import (
     PEER_ID,
     RETRY_BASE_DELAY
 )
-from app.errors import BencodeError, InvalidTorrentError, PeerProtocolError
+from app.errors import BencodeError, InvalidTorrentError, PeerProtocolError, TrackerError
 from app.magnet import parse_magnet_link
 from app.models import MagnetLink, Peer, TorrentMetadata
 from app.peer import PeerConnection
@@ -230,7 +230,31 @@ class TorrentClient:
             raise BencodeError(f"Invalid bencoded value: {value!r}") from exc
 
     def get_peers(self, meta: TorrentMetadata) -> list[Peer]:
-        return self.tracker.get_peers(meta.tracker_url, meta.info_hash, meta.length)
+        return self._announce(meta.announce_urls, meta.info_hash, meta.length)
+
+    def _announce(self, trackers: list[str], info_hash: bytes, left: int) -> list[Peer]:
+        """Announce to each tracker in order, returning the first peer list.
+
+        A tracker that errors - a ``failure reason`` response, an empty or
+        malformed peer list, or an HTTP/network fault (all raised as
+        ``TrackerError``) - is skipped in favour of the next, so a single dead
+        or unhappy tracker no longer fails the command. If every tracker fails,
+        the last error propagates. ``trackers`` is never empty (it falls back to
+        the primary announce URL).
+        """
+
+        last_error: TrackerError | None = None
+        for index, url in enumerate(trackers):
+            try:
+                return self.tracker.get_peers(url, info_hash, left)
+            except TrackerError as error:
+                last_error = error
+                logger.debug(
+                    "tracker announce failed; trying the next",
+                    extra={"ctx": {"tracker": index + 1, "of": len(trackers), "error": str(error)}}
+                )
+        assert last_error is not None
+        raise last_error
 
     def handshake(self, meta: TorrentMetadata, peer: Peer | None = None) -> str:
         """Connect and handshake; return the peer's id (hex).
@@ -288,7 +312,7 @@ class TorrentClient:
         self._atomic_write(output_path, piece)
 
     def magnet_download_to_file(self, magnet: MagnetLink, output_path: str) -> None:
-        peers = self.tracker.get_peers(magnet.tracker_url, magnet.info_hash, MAGNET_STUB_LENGTH)
+        peers = self._announce(magnet.announce_urls, magnet.info_hash, MAGNET_STUB_LENGTH)
         with self._atomic_output(output_path) as output_file:
             with self._magnet_connection(magnet, peers) as (conn, ext_id):
                 meta = metadata_from_raw_info(magnet.tracker_url, conn.fetch_metadata(ext_id), magnet.info_hash)
@@ -314,7 +338,7 @@ class TorrentClient:
         """
 
         if peers is None:
-            peers = self.tracker.get_peers(magnet.tracker_url, magnet.info_hash, MAGNET_STUB_LENGTH)
+            peers = self._announce(magnet.announce_urls, magnet.info_hash, MAGNET_STUB_LENGTH)
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
             self._connect_with_retry(conn, peers)
             conn.handshake(magnet.info_hash, magnet=True)

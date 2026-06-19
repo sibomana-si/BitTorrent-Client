@@ -21,8 +21,10 @@ def parse_magnet_link(uri: str) -> MagnetLink:
     Parsed structurally with ``urlparse``/``parse_qs`` rather than by substring
     search, so field order, percent-encoding, and extra/duplicate parameters
     cannot be used to smuggle a different value past the parser. Only the subset
-    this client uses is honoured: the ``xt=urn:btih:`` info hash and the first
-    ``tr=`` tracker announce URL.
+    this client uses is honoured: the ``xt=urn:btih:`` info hash and the
+    ``tr=`` tracker announce URLs - the first is the primary ``tracker_url``
+    (shown by ``magnet_parse``), and all of them, de-duplicated in order, are
+    kept in ``trackers`` for failover.
     """
 
     parsed = urlparse(uri)
@@ -47,5 +49,6 @@ def parse_magnet_link(uri: str) -> MagnetLink:
     except ValueError as exc:
         raise InvalidMagnetError(f"Invalid info hash in magnet link: {uri}") from exc
 
-    logger.debug("magnet link parsed", extra={"ctx": {"info_hash": info_hash.hex()[:8], "tracker": tr_values[0]}})
-    return MagnetLink(info_hash=info_hash, tracker_url=tr_values[0])
+    trackers = tuple(dict.fromkeys(tr_values))
+    logger.debug("magnet link parsed", extra={"ctx": {"info_hash": info_hash.hex()[:8], "tracker": tr_values[0], "trackers": len(trackers)}})
+    return MagnetLink(info_hash=info_hash, tracker_url=tr_values[0], trackers=trackers)
