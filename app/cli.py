@@ -8,13 +8,19 @@ to stdout for presentation.
 from __future__ import annotations
 
 import argparse
+import importlib
+import importlib.metadata
 import json
 import logging
 import logging.handlers
 import os
+import platform
+import socket
 import sys
 import uuid
+from urllib.parse import urlsplit
 
+from app import __version__
 from app.client import TorrentClient
 from app.constants import (
     DEFAULT_LOG_LEVEL,
@@ -221,6 +227,15 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _dependency_version(package: str) -> str:
+    """Installed version of a dependency, or ``"unknown"`` if absent."""
+
+    try:
+        return importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def _resolve_log_level(args: argparse.Namespace) -> int:
     """Flag beats env beats the silent default."""
 
@@ -311,6 +326,17 @@ def main(argv: list[str] | None = None) -> None:
         run_id=run_id,
         log_file=log_file
     )
+    logger.debug(
+        "client starting",
+        extra={
+            "ctx": {
+                "version": __version__,
+                "python": platform.python_version(),
+                "bencode_py": _dependency_version("bencode.py"),
+                "command": args.command
+            }
+        }
+    )
     reporter = CompositeReporter(StdoutReporter(), LoggingReporter())
     client = TorrentClient(reporter=reporter)
     try:
@@ -400,6 +426,62 @@ def _magnet_download(args: argparse.Namespace, client: TorrentClient) -> None:
     print("torrent magnet file download completed.")
 
 
+def _selftest(args: argparse.Namespace, client: TorrentClient) -> None:
+    """Diagnostic mode: report build provenance and run reachability checks.
+
+    Prints version provenance, then PASS/FAIL
+    lines for each check, exiting non-zero if any fails. A given ``source``
+    (``.torrent``/magnet) adds a DNS-resolution check; ``--check-tracker`` adds
+    a live announce for a ``.torrent``.
+    """
+
+    print(f"client: {__version__}")
+    print(f"python: {platform.python_version()}")
+    print(f"bencode.py: {_dependency_version('bencode.py')}")
+    checks: list[tuple[str, bool]] = [
+        ("python >= 3.8", sys.version_info >= (3, 8)),
+        ("bencodepy importable", _can_import("bencodepy"))
+    ]
+    if args.source:
+        checks.append(_check_source(client, args.source, args.check_tracker))
+    for name, ok in checks:
+        print(f"{'PASS' if ok else 'FAIL'} {name}")
+    if not all(ok for _, ok in checks):
+        raise SystemExit(1)
+
+
+def _can_import(module: str) -> bool:
+    try:
+        importlib.import_module(module)
+        return True
+    except ImportError:
+        return False
+
+
+def _check_source(client: TorrentClient, source: str, check_tracker: bool) -> tuple[str, bool]:
+    meta = None
+    try:
+        if source.startswith("magnet:"):
+            tracker_url = client.parse_magnet(source).tracker_url
+        else:
+            meta = client.read_metadata(source)
+            tracker_url = meta.tracker_url
+    except BitTorrentError as exc:
+        return f"parse source ({exc})", False
+    host = urlsplit(tracker_url).hostname
+    try:
+        socket.getaddrinfo(host, None)
+    except OSError as exc:
+        return f"resolve {host} ({exc})", False
+    if check_tracker and meta is not None:
+        try:
+            peers = client.get_peers(meta)
+            return f"announce {host} ({len(peers)} peers)", True
+        except BitTorrentError as exc:
+            return f"announce {host} ({exc})", False
+    return f"resolve {host}", True
+
+
 def _print_metadata(meta: TorrentMetadata) -> None:
     print(f"Tracker URL: {meta.tracker_url}")
     print(f"Length: {meta.length}")
@@ -448,5 +530,9 @@ def _build_parser() -> argparse.ArgumentParser:
     magnet_download = add("magnet_download", _magnet_download)
     magnet_download.add_argument("-o", "--output", required=True)
     magnet_download.add_argument("link")
+
+    selftest = add("selftest", _selftest)
+    selftest.add_argument("source", nargs="?")
+    selftest.add_argument("--check-tracker", action="store_true")
 
     return parser
