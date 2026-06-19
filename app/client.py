@@ -94,6 +94,102 @@ class _OrderedProgress:
                 self._next += 1
 
 
+class _DownloadSession:
+    """Shared state and per-worker operations for one full download.
+
+    Owns the peer rotation, the replacement connections opened here, and the run
+    stats, so the sequential and concurrent download paths drive the same
+    connect/handshake and per-piece failover logic. ``initial_conn`` (a magnet
+    metadata socket) is owned by the caller and is never closed here.
+    """
+
+    def __init__(
+            self,
+            client: "TorrentClient",
+            meta: TorrentMetadata,
+            peers: list[Peer],
+            info_hash: bytes,
+            *,
+            magnet: bool,
+            initial_conn: PeerConnection | None
+    ) -> None:
+        self._client = client
+        self._meta = meta
+        self._peers = peers
+        self._info_hash = info_hash
+        self._magnet = magnet
+        self._initial_conn = initial_conn
+        self.stats = {"bytes": 0, "piece_failures": 0, "failovers": 0}
+        self.stats_lock = threading.Lock()
+        self.opened: list[PeerConnection] = []
+        self._rotation = 0
+        self._rotation_lock = threading.Lock()
+
+    def open_ready(self, reporter: ProgressReporter) -> PeerConnection:
+        """Open, connect, handshake, and unchoke a fresh worker connection."""
+
+        conn = PeerConnection(self._client.peer_id, reporter=reporter)
+        with self._rotation_lock:
+            self.opened.append(conn)
+            count = len(self._peers) or 1
+            start = self._rotation % count
+            self._rotation = start + 1
+        ordered = list(self._peers[start:]) + list(self._peers[:start])
+        self._client._connect_with_retry(conn, ordered)
+        conn.handshake(self._info_hash, magnet=self._magnet)
+        conn.send_interested()
+        return conn
+
+    def download_one(
+            self,
+            conn: PeerConnection,
+            piece_index: int,
+            reporter: ProgressReporter
+    ) -> tuple[PeerConnection, bytearray]:
+        """One piece with per-piece failover; returns the live connection."""
+
+        for attempt in range(1, _PIECE_RETRIES + 1):
+            try:
+                return conn, conn.download_piece(self._meta, piece_index, reporter)
+            except PeerProtocolError as error:
+                with self.stats_lock:
+                    self.stats["piece_failures"] += 1
+                logger.debug(
+                    "piece failed",
+                    extra={
+                        "ctx": {
+                            "piece_index": piece_index,
+                            "attempt": attempt,
+                            "error": str(error)
+                        }
+                    }
+                )
+                if conn is not self._initial_conn:
+                    conn.close()
+                if attempt == _PIECE_RETRIES:
+                    raise
+                with self.stats_lock:
+                    self.stats["failovers"] += 1
+                logger.debug(
+                    "failing over to the next peer",
+                    extra={"ctx": {"piece_index": piece_index}}
+                )
+                conn = self.open_ready(reporter)
+        raise AssertionError("unreachable: the retry loop returns or raises")
+
+    @property
+    def connection_count(self) -> int:
+        """How many connections this download used (for the completion log)."""
+
+        return len(self.opened) + (1 if self._initial_conn else 0)
+
+    def close_all(self) -> None:
+        """Close every replacement connection; ``initial_conn`` is the caller's."""
+
+        for conn in self.opened:
+            conn.close()
+
+
 class TorrentClient:
     """High-level operations over a torrent or a magnet link."""
 
@@ -320,81 +416,20 @@ class TorrentClient:
         piece-index order.
         """
 
-        rotation = 0 # where in the peer list the next fresh connection starts
-        rotation_lock = threading.Lock()
-        opened: list[PeerConnection] = []
-        stats = {"bytes": 0, "piece_failures": 0, "failovers": 0}
-        stats_lock = threading.Lock()
-
-        def open_ready(reporter: ProgressReporter) -> PeerConnection:
-            nonlocal rotation
-            conn = PeerConnection(self.peer_id, reporter=reporter)
-            with rotation_lock:
-                opened.append(conn)
-                count = len(peers) or 1
-                start = rotation % count
-                rotation = start + 1
-            ordered = list(peers[start:]) + list(peers[:start])
-            self._connect_with_retry(conn, ordered)
-            conn.handshake(info_hash, magnet=magnet)
-            conn.send_interested()
-            return conn
-
-        def download_one(
-                conn: PeerConnection,
-                piece_index: int,
-                reporter: ProgressReporter
-        ) -> tuple[PeerConnection, bytearray]:
-            """One piece with per-piece failover; returns the live connection."""
-
-            for attempt in range(1, _PIECE_RETRIES + 1):
-                try:
-                    return conn, conn.download_piece(meta, piece_index)
-                except PeerProtocolError as error:
-                    with stats_lock:
-                        stats["piece_failures"] += 1
-                    logger.debug(
-                        "piece failed",
-                        extra={
-                            "ctx": {
-                                "piece_index": piece_index,
-                                "attempt": attempt,
-                                "error": str(error)
-                            }
-                        }
-                    )
-                    if conn is not initial_conn:
-                        conn.close()
-                    if attempt == _PIECE_RETRIES:
-                        raise
-                    with stats_lock:
-                        stats["failovers"] += 1
-                    logger.debug(
-                        "failing over to the next peer",
-                        extra={"ctx": {"piece_index": piece_index}}
-                    )
-                    conn = open_ready(reporter)
-            raise AssertionError("unreachable: the retry loop returns or raises")
-
+        session = _DownloadSession(self, meta, peers, info_hash, magnet=magnet, initial_conn=initial_conn)
         workers = min(_max_peer_connections(), len(meta.piece_hashes))
         # Open every connection (for torrent) before announcing progress so the
         # "connected to ..." line(s) keep a deterministic position in the output.
         conns = [] if initial_conn is None else [initial_conn]
-        conns += [open_ready(self._reporter) for _ in range(workers - len(conns))]
+        conns += [session.open_ready(self._reporter) for _ in range(workers - len(conns))]
         self._reporter.report(f"downloading to {output_path} ...")
         self._reporter.report(f"pieces to download: {len(meta.piece_hashes)}")
         started = time.perf_counter()
         try:
             if workers <= 1:
-                conn = conns[0]
-                for piece_index in range(len(meta.piece_hashes)):
-                    conn, piece = download_one(conn, piece_index, self._reporter)
-                    output_file.seek(piece_index * meta.piece_length)
-                    output_file.write(piece)
-                    stats["bytes"] += len(piece)
-                    self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
+                self._download_sequentially(meta, output_file, conns[0], session)
             else:
-                self._download_concurrently(meta, output_file, conns, download_one, stats, stats_lock)
+                self._download_concurrently(meta, output_file, conns, session)
 
             elapsed = time.perf_counter() - started
             logger.info(
@@ -402,28 +437,42 @@ class TorrentClient:
                 extra={
                     "ctx": {
                         "info_hash": info_hash.hex()[:8],
-                        "bytes": stats["bytes"],
+                        "bytes": session.stats["bytes"],
                         "pieces": len(meta.piece_hashes),
                         "elapsed_ms": round(elapsed * 1000, 1),
-                        "throughput_bps": round(stats["bytes"] / elapsed) if elapsed else 0,
-                        "piece_failures": stats["piece_failures"],
-                        "failovers": stats["failovers"],
-                        "connections": len(opened) + (1 if initial_conn else 0)
+                        "throughput_bps": round(session.stats["bytes"] / elapsed) if elapsed else 0,
+                        "piece_failures": session.stats["piece_failures"],
+                        "failovers": session.stats["failovers"],
+                        "connections": session.connection_count
                     }
                 }
             )
         finally:
-            for conn in opened:
-                conn.close()
+            session.close_all()
+
+    def _download_sequentially(
+            self,
+            meta: TorrentMetadata,
+            output_file: BinaryIO,
+            conn: PeerConnection,
+            session: _DownloadSession
+    ) -> None:
+        """Download every piece over a single connection, in index order."""
+
+        for piece_index in range(len(meta.piece_hashes)):
+            conn, piece = session.download_one(conn, piece_index, self._reporter)
+            output_file.seek(piece_index * meta.piece_length)
+            output_file.write(piece)
+            with session.stats_lock:
+                session.stats["bytes"] += len(piece)
+            self._reporter.report(f"piece_{piece_index} | {len(piece)} downloaded.")
 
     def _download_concurrently(
             self,
             meta: TorrentMetadata,
             output_file: BinaryIO,
             conns: list[PeerConnection],
-            download_one,
-            stats: dict[str, int],
-            stats_lock: threading.Lock
+            session: _DownloadSession
     ) -> None:
         """Stripe the pieces across the worker connections.
 
@@ -448,16 +497,15 @@ class TorrentClient:
                 except IndexError:
                     return
                 buffer = _BufferReporter()
-                conn.rebind_reporter(buffer)
                 try:
-                    conn, piece = download_one(conn, piece_index, buffer)
+                    conn, piece = session.download_one(conn, piece_index, buffer)
                 except Exception:
                     abort.set()
                     ordered.deliver(piece_index, buffer.lines)
                     raise
                 os.pwrite(fd, piece, piece_index * meta.piece_length)
-                with stats_lock:
-                    stats["bytes"] += len(piece)
+                with session.stats_lock:
+                    session.stats["bytes"] += len(piece)
                 buffer.report(f"piece_{piece_index} | {len(piece)} downloaded.")
                 ordered.deliver(piece_index, buffer.lines)
 

@@ -77,16 +77,6 @@ class PeerConnection:
             raise RuntimeError("Not connected to a peer")
         return self._sock
 
-    def rebind_reporter(self, reporter: ProgressReporter) -> None:
-        """Route subsequent progress lines to ``reporter``.
-
-        The concurrent downloader buffers each piece's lines so they can be
-        released in piece-index order; a connection outlives any single piece,
-        so its reporter is swapped as it moves between pieces.
-        """
-
-        self._reporter = reporter
-
     def connect(self, peers: Sequence[Peer]) -> None:
         """Connect to the first reachable peer, trying each in turn."""
 
@@ -297,10 +287,23 @@ class PeerConnection:
         )
         self._socket.sendall(message)
 
-    def download_piece(self, meta: TorrentMetadata, piece_index: int) -> bytearray:
-        """Download one piece, verify its SHA-1, and return its bytes."""
+    def download_piece(
+            self,
+            meta: TorrentMetadata,
+            piece_index: int,
+            reporter: ProgressReporter | None = None
+    ) -> bytearray:
+        """Download one piece, verify its SHA-1, and return its bytes.
 
-        self._reporter.report(f"downloading piece_index: {piece_index} ...")
+        ``reporter`` overrides the connection's reporter for this piece's
+        progress lines (the concurrent downloader passes a per-piece buffer so
+        the lines can be released in piece-index order); it defaults to the
+        connection's own reporter for the single-connection paths.
+        """
+
+        if reporter is None:
+            reporter = self._reporter
+        reporter.report(f"downloading piece_index: {piece_index} ...")
         started = time.perf_counter()
         blocks = self._block_requests(meta, piece_index)
 
@@ -349,7 +352,7 @@ class PeerConnection:
                 }
             }
         )
-        self._reporter.report(f"valid piece hash: {actual.hex()} | {expected.hex()}")
+        reporter.report(f"valid piece hash: {actual.hex()} | {expected.hex()}")
         return piece
 
     @staticmethod
