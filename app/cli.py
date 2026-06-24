@@ -363,9 +363,16 @@ def _decode(args: argparse.Namespace, client: TorrentClient) -> None:
 
 
 def _jsonable(value):
-    """Make a decoded bencode value JSON-serializable (bytes -> str)."""
+    """Make a decoded bencode value JSON-serializable (bytes -> str).
+
+    Bencode strings are arbitrary bytes, not text, so decode leniently: a
+    binary value (e.g. ``pieces``) must not crash ``decode`` with an uncaught
+    UnicodeDecodeError, which - not being a BitTorrentError - would escape the
+    CLI error boundary as a traceback. Invalid bytes become U+FFFD.
+    """
+
     if isinstance(value, bytes):
-        return value.decode()
+        return value.decode("utf-8", errors="replace")
     if isinstance(value, list):
         return [_jsonable(item) for item in value]
     if isinstance(value, dict):
