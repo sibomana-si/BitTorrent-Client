@@ -1,0 +1,10 @@
+# Development / supply-chain tooling (not required to run the client).
+#   pip install -r requirements-dev.txt
+# Then audit the pinned runtime deps with:
+#   pip-audit -r requirements.txt
+# and regenerate the lockfile after editing requirements.in with:
+#   pip-compile --generate-hashes requirements.in
+-r requirements.txt
+pip-tools
+pip-audit
+mypy

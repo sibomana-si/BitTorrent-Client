@@ -1,0 +1,7 @@
+# Direct dependencies. Compile to a fully-pinned, hashed requirements.txt with:
+#   pip-compile --generate-hashes requirements.in
+
+bencode.py==4.0.0
+requests==2.34.2
+urllib3>=1.26.20,<3
+pytest>=9.0.3,<10
