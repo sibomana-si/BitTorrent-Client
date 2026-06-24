@@ -82,6 +82,13 @@ MAGNET_STUB_LENGTH = 999
 # are honoured (blocks file://, gopher://, ftp:// and similar SSRF vectors).
 ALLOWED_SCHEMES = ("http", "https")
 
+# Tracker-supplied peer addresses are equally untrusted: by default they are run
+# through the same SSRF guard as the tracker URL, so a hostile tracker cannot
+# point the client at loopback / link-local / private hosts. Set this (flag-free,
+# env only) when the swarm legitimately lives on loopback/LAN - including the
+# test harness, whose FakePeer binds 127.0.0.1.
+ALLOW_PRIVATE_PEERS_ENV_VAR = "BITTORRENT_ALLOW_PRIVATE_PEERS"
+
 # How many tracker redirects to follow before giving up. Each hop is re-checked
 # against the SSRF guard, so this only bounds a redirect loop / chain.
 MAX_REDIRECTS = 5

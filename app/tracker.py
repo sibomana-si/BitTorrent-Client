@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import os
 import socket
 import time
 from urllib.parse import quote_plus, urlencode, urljoin, urlsplit
@@ -14,6 +15,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.constants import (
+    ALLOW_PRIVATE_PEERS_ENV_VAR,
     ALLOWED_SCHEMES,
     MAX_REDIRECTS,
     MAX_TRACKER_RESPONSE_BYTES,
@@ -46,6 +48,21 @@ def _is_blocked_ip(ip: str) -> bool:
         or address.is_multicast
         or address.is_unspecified
     )
+
+
+def _peer_address_allowed(ip: str) -> bool:
+    """Whether we may connect to a tracker-supplied peer address.
+
+    Peer records come from the (untrusted) tracker just like the announce URL,
+    so a compromised tracker could list ``127.0.0.1`` or ``169.254.169.254`` to
+    make us probe internal services. They are held to the same SSRF guard unless
+    the operator opts out for a legitimate loopback/LAN swarm (see
+    :data:`ALLOW_PRIVATE_PEERS_ENV_VAR`).
+    """
+
+    if os.getenv(ALLOW_PRIVATE_PEERS_ENV_VAR):
+        return True
+    return not _is_blocked_ip(ip)
 
 
 def _validate_tracker_url(url: str) -> None:
@@ -196,6 +213,14 @@ class TrackerClient:
             raise TrackerError(f"Unexpected tracker response: {exc}") from exc
 
         parsed = self._parse_peers(peers)
+        allowed = [peer for peer in parsed if _peer_address_allowed(peer.ip)]
+        if len(allowed) < len(parsed):
+            logger.warning(
+                "dropped tracker-supplied peers blocked by the SSRF guard",
+                extra={"ctx": {"dropped": len(parsed) - len(allowed), "kept": len(allowed)}}
+            )
+        if not allowed:
+            raise TrackerError("Tracker returned only blocked peer addresses")
         logger.debug(
             "tracker announce ok",
             extra={
@@ -203,12 +228,12 @@ class TrackerClient:
                     "tracker": urlsplit(tracker_url).hostname,
                     "info_hash": info_hash.hex()[:8],
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
-                    "peers": len(parsed),
+                    "peers": len(allowed),
                     "left": left
                 }
             }
         )
-        return parsed
+        return allowed
 
 
     @staticmethod
