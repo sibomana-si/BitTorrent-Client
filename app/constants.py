@@ -5,6 +5,9 @@ and tracker code, and documents the few values the BitTorrent spec fixes.
 """
 
 import logging
+import os
+import secrets
+
 
 # Default level for the stderr diagnostic logger. Set above CRITICAL - fully
 # silent - rather than the conventional WARNING, because the
@@ -32,7 +35,36 @@ LOG_FILE_MAX_BYTES = 2**20 # 1 MiB per file before rotation
 LOG_FILE_BACKUPS = 3
 
 # Identifier this client announces to trackers and peers (must be 20 bytes).
-PEER_ID = b"00112233445566998877"
+# Pin a specific id via this env var (e.g. for reproducible captures or tests).
+PEER_ID_ENV_VAR = "BITTORRENT_PEER_ID"
+
+# Azureus-style 8-byte prefix: '-' + 2-char client id 'CC' + 4-digit version +
+# '-'. The remaining 12 bytes are random, so the id is unique per run.
+_PEER_ID_PREFIX = b"-CC0100-"
+
+
+def _resolve_peer_id() -> bytes:
+    """The 20-byte peer id for this process, fixed for the whole run.
+
+    A fixed id is fingerprintable, can collide in a swarm, and is penalised by
+    some trackers, so a fresh random id is generated each run. ``PEER_ID_ENV_VAR``
+    pins it when set (must encode to exactly 20 bytes).
+    """
+
+    override = os.getenv(PEER_ID_ENV_VAR)
+    if override is not None:
+        encoded = override.encode()
+        if len(encoded) != 20:
+            raise ValueError(
+                f"{PEER_ID_ENV_VAR} must be exactly 20 bytes, got {len(encoded)}"
+            )
+        return encoded
+    peer_id = _PEER_ID_PREFIX + secrets.token_bytes(20 - len(_PEER_ID_PREFIX))
+    assert len(peer_id) == 20
+    return peer_id
+
+
+PEER_ID = _resolve_peer_id()
 
 # Port we claim to listen on when announcing to a tracker.
 TRACKER_PORT = 6881
