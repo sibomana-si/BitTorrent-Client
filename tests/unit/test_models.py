@@ -33,7 +33,7 @@ class TestPeer:
     def test_is_frozen(self):
         peer = Peer("1.2.3.4", 6881)
         with pytest.raises(dataclasses.FrozenInstanceError):
-            peer.ip = "5.6.7.8"
+            peer.ip = "5.6.7.8"     # type: ignore[misc]
 
 
 class TestMagnetLink:
@@ -44,7 +44,7 @@ class TestMagnetLink:
     def test_is_frozen(self):
         magnet = MagnetLink(info_hash=b"\x00" * 20, tracker_url="http://t.test/a")
         with pytest.raises(dataclasses.FrozenInstanceError):
-            magnet.tracker_url = "http://other.test/a"
+            magnet.tracker_url = "http://other.test/a"      # type: ignore[misc]
 
 
 class TestTorrentMetadata:
@@ -66,4 +66,4 @@ class TestTorrentMetadata:
     def test_is_frozen(self):
         meta = self._meta()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            meta.length = 64
+            meta.length = 64        # type: ignore[misc]
