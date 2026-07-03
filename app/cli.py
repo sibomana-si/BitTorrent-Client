@@ -112,7 +112,7 @@ class _RedactionFilter(logging.Filter):
     """Mask sensitive ctx fields so a verbose log excerpt is shareable.
 
     Peer addresses, hostnames/IPs, the peer id, and a full info hash identify who
-    the client talked to. When enabled, mask them on a *copy* of the record's
+    the client talked to. When enabled, mask them on a copy of the record's
     ctx, leaving the in-memory entity (and any other handler's own pass)
     untouched.
     """

@@ -1,6 +1,6 @@
 """The client's error contract.
 
-Every *expected* operational failure is a :class:`BitTorrentError`. The CLI
+Every expected operational failure is a :class:`BitTorrentError`. The CLI
 boundary (:func:`app.cli.main`) catches this base class, reports it cleanly, and
 exits non-zero; anything else propagates as a traceback, so genuine bugs stay
 loud. Each infrastructure boundary translates the low-level exception it sees

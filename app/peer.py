@@ -13,6 +13,7 @@ import logging
 import socket
 import time
 from collections.abc import Sequence
+from typing import cast
 
 import bencodepy
 
@@ -244,7 +245,7 @@ class PeerConnection:
         self._send_extension(extension_id=0, payload=payload)
 
         response = self._recv_until(MSG_EXTENSION)
-        handshake = bencodepy.decode(response[6:])
+        handshake = cast(dict, cast(object, bencodepy.decode(response[6:])))
         if b"m" not in handshake or b"ut_metadata" not in handshake[b"m"]:
             raise PeerProtocolError(f"Invalid extension handshake response: {handshake}")
         self.metadata_extension_id = handshake[b"m"][b"ut_metadata"]
@@ -273,8 +274,15 @@ class PeerConnection:
         # negative/huge/missing value can't yield a garbage slice or OOM.
         available = len(response) - 6
         if (not isinstance(total_size, int) or not 0 < total_size <= available or total_size > MAX_METADATA_BYTES):
-            logger.warning("peer metadata rejected by the size guard",
-                           extra={"ctx": {"total_size": total_size, "available": available}})
+            logger.warning(
+                "peer metadata rejected by the size guard",
+                extra={
+                    "ctx": {
+                        "total_size": total_size,
+                        "available": available
+                    }
+                }
+            )
             raise PeerProtocolError(f"Peer advertised an invalid metadata size: {total_size!r}")
         return response[-total_size:]
 
@@ -407,4 +415,4 @@ def _decode_leading(buf: bytes) -> dict:
 
     decoder = bencodepy.BencodeDecoder()
     value, _consumed = decoder.decode_func[buf[:1]](buf, 0)
-    return value
+    return cast(dict, cast(object, value))

@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import time
+from typing import cast
 from urllib.parse import quote_plus, urlencode, urljoin, urlsplit
 
 import bencodepy
@@ -35,10 +36,11 @@ logger = logging.getLogger(__name__)
 def _is_blocked_ip(ip: str) -> bool:
     """True if ``ip`` is one we must never let a tracker URL point us at.
 
-    Loopback, private, link-local (including the cloud-metadata address
-    ``169.254.169.254``), reserved, multicast, and unspecified addresses are all
-    internal/non-routable targets an SSRF payload would aim for.
+    Loopback, private, link-local (including the cloud-metadata address ``169.254.169.254``),
+    reserved, multicast, and unspecified addresses are all internal/non-routable targets an SSRF
+    payload would aim for.
     """
+
     address = ipaddress.ip_address(ip)
     return (
         address.is_loopback
@@ -56,8 +58,8 @@ def _peer_address_allowed(ip: str) -> bool:
     Peer records come from the (untrusted) tracker just like the announce URL,
     so a compromised tracker could list ``127.0.0.1`` or ``169.254.169.254`` to
     make us probe internal services. They are held to the same SSRF guard unless
-    the operator opts out for a legitimate loopback/LAN swarm (see
-    :data:`ALLOW_PRIVATE_PEERS_ENV_VAR`).
+    the operator opts out for a legitimate loopback/LAN swarm
+    (see :data:`ALLOW_PRIVATE_PEERS_ENV_VAR`).
     """
 
     if os.getenv(ALLOW_PRIVATE_PEERS_ENV_VAR):
@@ -90,7 +92,7 @@ def _validate_tracker_url(url: str) -> None:
         raise TrackerError(f"Cannot resolve tracker host {host!r}: {exc}") from exc
 
     for info in resolved:
-        ip = info[4][0]
+        ip = cast(str, info[4][0])
         if _is_blocked_ip(ip):
             logger.warning(
                 "tracker URL rejected by the SSRF guard",
@@ -197,7 +199,7 @@ class TrackerClient:
             raise TrackerError(f"Tracker request failed: {exc}") from exc
 
         try:
-            decoded = bencodepy.decode(body)
+            decoded = cast(dict, cast(object, bencodepy.decode(body)))
         except bencodepy.BencodeDecodeError as exc:
             raise TrackerError(f"Unexpected tracker response: {exc}") from exc
 

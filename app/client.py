@@ -99,8 +99,8 @@ class _DownloadSession:
 
     Owns the peer rotation, the replacement connections opened here, and the run
     stats, so the sequential and concurrent download paths drive the same
-    connect/handshake and per-piece failover logic. ``initial_conn`` (a magnet
-    metadata socket) is owned by the caller and is never closed here.
+    connect/handshake and per-piece failover logic. ``initial_conn``
+    (a magnet metadata socket) is owned by the caller and is never closed here.
     """
 
     def __init__(
@@ -216,14 +216,17 @@ class TorrentClient:
 
     def read_metadata(self, path: str) -> TorrentMetadata:
         """Load and parse a ``.torrent`` file into metadata."""
+
         return load_torrent_file(path)
 
     def parse_magnet(self, link: str) -> MagnetLink:
         """Parse a magnet URI into its tracker URL and info hash."""
+
         return parse_magnet_link(link)
 
     def decode(self, value: str):
         """Decode a bencoded string into native Python objects."""
+
         try:
             return bencodepy.decode(value.encode())
         except bencodepy.BencodeDecodeError as exc:
@@ -285,6 +288,7 @@ class TorrentClient:
     @contextmanager
     def _ready_connection(self, meta: TorrentMetadata) -> Iterator[PeerConnection]:
         """A connection that has handshaked, read the bitfield, and unchocked."""
+
         with PeerConnection(self.peer_id, reporter=self._reporter) as conn:
             self._connect_with_retry(conn, self.get_peers(meta))
             conn.handshake(meta.info_hash)
@@ -352,6 +356,7 @@ class TorrentClient:
         The length comes from an untrusted torrent/magnet; a crafted one must not
         be able to request a disk-filling write.
         """
+
         if length > MAX_TORRENT_LENGTH:
             raise InvalidTorrentError(f"Refusing to download {length} bytes (over the {MAX_TORRENT_LENGTH}-byte limit)")
 

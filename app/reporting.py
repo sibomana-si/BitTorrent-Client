@@ -2,8 +2,8 @@
 
 Inner layers (the application and infrastructure) describe what is happening by
 calling :meth:`ProgressReporter.report`; they do not decide where it goes. The
-interface layer supplies the concrete sink (``StdoutReporter`` in
-:mod:`app.cli`), keeping all output at the boundary where it belongs.
+interface layer supplies the concrete sink (``StdoutReporter`` in :mod:`app.cli`),
+keeping all output at the boundary where it belongs.
 """
 
 from __future__ import annotations

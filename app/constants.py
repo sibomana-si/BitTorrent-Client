@@ -36,7 +36,7 @@ LOG_FILE_BACKUPS = 3
 
 # Identifier this client announces to trackers and peers (must be 20 bytes).
 # Pin a specific id via this env var (e.g. for reproducible captures or tests).
-PEER_ID_ENV_VAR = "BITTORRENT_PEER_ID"
+PEER_ID_ENV_VAR = "BITTORRENT_PEER_ID" # b"00112233445566998877"
 
 # Azureus-style 8-byte prefix: '-' + 2-char client id 'CC' + 4-digit version +
 # '-'. The remaining 12 bytes are random, so the id is unique per run.
@@ -55,9 +55,7 @@ def _resolve_peer_id() -> bytes:
     if override is not None:
         encoded = override.encode()
         if len(encoded) != 20:
-            raise ValueError(
-                f"{PEER_ID_ENV_VAR} must be exactly 20 bytes, got {len(encoded)}"
-            )
+            raise ValueError(f"{PEER_ID_ENV_VAR} must be exactly 20 bytes, got {len(encoded)}")
         return encoded
     peer_id = _PEER_ID_PREFIX + secrets.token_bytes(20 - len(_PEER_ID_PREFIX))
     assert len(peer_id) == 20

@@ -1,8 +1,6 @@
 """Immutable domain entities. No I/O, no protocol logic - just data.
 
-The info hash is stored once, as raw 20 bytes, with a ``*_hex`` helper for
-display. This is deliberate: the previous design kept it as a mix of hash
-objects, hex strings, and bytes, forcing ``type(...)`` checks at every call site.
+The info hash is stored once, as raw 20 bytes, with a ``*_hex`` helper for display.
 """
 
 from __future__ import annotations

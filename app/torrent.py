@@ -3,8 +3,8 @@
 Two sources produce the same entity:
 
 - a local ``.torrent`` file, where the info hash is the SHA-1 of the re-encoded ``info`` dictionary;
-- a raw ``info`` dictionary fetched from a peer over the metadata extension
-    (magnet links), where the info hash is the SHA-1 of the bytes as received.
+- a raw ``info`` dictionary fetched from a peer over the metadata extension (magnet links),
+    where the info hash is the SHA-1 of the bytes as received.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
+from typing import cast
 
 import bencodepy
 
@@ -37,7 +38,7 @@ def load_torrent_file(path: str) -> TorrentMetadata:
         raise InvalidTorrentError(f"Cannot read torrent file: {path}") from exc
 
     try:
-        decoded = bencodepy.decode(raw)
+        decoded = cast(dict, cast(object, bencodepy.decode(raw)))
         info = decoded[b"info"]
     except (bencodepy.BencodeDecodeError, KeyError) as exc:
         raise InvalidTorrentError(f"Malformed torrent file: {path}") from exc
@@ -78,7 +79,7 @@ def metadata_from_raw_info(tracker_url: str, raw_info: bytes, expected_hash: byt
     if expected_hash is not None and info_hash != expected_hash:
         raise PeerProtocolError(f"Metadata info hash mismatch: {info_hash.hex()} != {expected_hash.hex()}")
     try:
-        info = bencodepy.decode(raw_info)
+        info = cast(dict, cast(object, bencodepy.decode(raw_info)))
         return _build(tracker_url, info, info_hash)
     except (bencodepy.BencodeDecodeError, KeyError, TypeError) as exc:
         raise InvalidTorrentError(f"Malformed metadata received from peer: {exc}") from exc

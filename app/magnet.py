@@ -50,5 +50,14 @@ def parse_magnet_link(uri: str) -> MagnetLink:
         raise InvalidMagnetError(f"Invalid info hash in magnet link: {uri}") from exc
 
     trackers = tuple(dict.fromkeys(tr_values))
-    logger.debug("magnet link parsed", extra={"ctx": {"info_hash": info_hash.hex()[:8], "tracker": tr_values[0], "trackers": len(trackers)}})
+    logger.debug(
+        "magnet link parsed",
+        extra={
+            "ctx": {
+                "info_hash": info_hash.hex()[:8],
+                "tracker": tr_values[0],
+                "trackers": len(trackers)
+            }
+        }
+    )
     return MagnetLink(info_hash=info_hash, tracker_url=tr_values[0], trackers=trackers)
